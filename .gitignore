@@ -1,0 +1,4 @@
+vizdoom/
+*.ini
+__pycache__/
+*.pyc
