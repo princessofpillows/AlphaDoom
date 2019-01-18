@@ -130,6 +130,7 @@ class AlphaDoom(object):
     def __init__(self):
         super(AlphaDoom, self).__init__()
 
+        # Create game instance
         self.game = vzd.DoomGame()
         self.game.load_config('vizdoom/scenarios/basic.cfg')
         self.game.init()
@@ -137,15 +138,16 @@ class AlphaDoom(object):
         self.global_step = tf.train.get_or_create_global_step()
         self.terminal = tf.zeros([84, 84, 1])
 
-        # Assign CPU due to GPU memory limitations
+        # Assign mcts, memory to CPU due to GPU memory limitations
         with tf.device('CPU:0'):
             self.mcts = MCTS()
             self.replay_memory = replay_memory()
 
         # Load selected model
         self.model = cfg.models[cfg.model](cfg, len(cfg.actions))
-        self.model.build((None,) + self.model.shape + (4,))
-        self.loss = cfg.losses[cfg.loss]
+        self.model.build((None,) + self.model.shape + (cfg.num_frames,))
+        self.loss1 = cfg.losses[cfg.loss1]
+        self.loss2 = cfg.losses[cfg.loss2]
         self.optimizer = cfg.optims[cfg.optim](cfg.learning_rate)
 
         self.build_writers()
@@ -162,7 +164,7 @@ class AlphaDoom(object):
 
         self.save_path = cfg.save_dir + cfg.extension
         self.ckpt_prefix = self.save_path + '/ckpt'
-        self.saver = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model, optimizer_step=self.global_step)
+        self.saver = tf.train.Checkpoint(model=self.model, optimizer=self.optimizer, optimizer_step=self.global_step)
 
     def logger(self, tape, loss):
         with tf.contrib.summary.record_summaries_every_n_global_steps(cfg.log_freq, self.global_step):
@@ -180,13 +182,13 @@ class AlphaDoom(object):
                             tf.contrib.summary.scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
 
     def update(self):
-        with tf.device('CPU:0'):
-            # Fetch batch of experiences
-            s, p, z = self.replay_memory.fetch()
+        # Fetch batch of experiences
+        s, pi, z = self.replay_memory.fetch()
         
         # Construct graph
         with tf.GradientTape() as tape:
-            loss = 1/2 * tf.reduce_mean(tf.losses.huber_loss(rewards + cfg.discount * target_q, q)) - entropy * cfg.entropy_rate
+            p, v = self.model(s)
+            loss = tf.reduce_mean(self.loss1(z, v) - self.loss2(tf.pow(pi, cfg.T), p) + cfg.c * tf.nn.l2_loss(self.model.weights))
         
         self.logger(tape, loss)
         # Compute/apply gradients
@@ -198,17 +200,20 @@ class AlphaDoom(object):
 
     def simulation(self):
         curr = self.mcts.search()
-        s, v, p_set = self.model(curr)
+        s = 0
+        p, v = self.model(curr)
         self.mcts.update(s, v, p_set)
 
-    def perform_action(self, frames):
-        p = self.model(frames)
+    def perform_action(self, a):
         # One-hot action
         choice = np.zeros(len(cfg.actions))
-        choice[tuple(cols)] += 1
+        choice[tuple(a)] += 1
         # Take action
-        z = self.game.make_action(choice, cfg.skiprate)
-        return z
+        reward = self.game.make_action(choice, cfg.skiprate)
+        if reward > 0:
+            return 1
+        else:
+            return -1
     
     def preprocess(self):
         screen = self.game.get_state().screen_buffer
@@ -217,34 +222,37 @@ class AlphaDoom(object):
         frame = tf.image.resize_images(frame, self.model.shape)
         return frame
     
+    def evaluate(self):
+        return False
+    
     def train(self):
         self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
         for episode in trange(cfg.episodes):
             # Save model
             if episode % cfg.save_freq == 0:
-                self.saver.save(file_prefix=self.ckpt_prefix)
+                # Check if new model is improvement over current best
+                if self.evaluate():
+                    self.saver.save(file_prefix=self.ckpt_prefix)
 
             # Setup variables
             self.game.new_episode()
             frame = self.preprocess()
+            frames = []
             # Init stack of 4 frames
-            frames = [frame, frame, frame, frame]
+            for i in cfg.num_frames:
+                frames.append(frame)
 
             while not self.game.is_episode_finished():
                 s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
-                z = self.perform_action(s)
+                a = self.simulation(s)
+                z = self.perform_action(a)
 
                 # Update frames with latest image
-                prev_frames = frames[:]
-                frames.pop(0)
-                # Reached terminal state, kill gradient
-                if self.game.get_state() is None:
-                    frames = [self.terminal, self.terminal, self.terminal, self.terminal]
-                    logits = tf.zeros(logits.shape)
-                else:
+                if self.game.get_state() is not None:
+                    frames.pop(0)
                     frames.append(self.preprocess())
 
-                self.replay_memory.push([s, p, z])
+                self.replay_memory.push([s, pi, z])
                 
             # Train on experiences from memory
             self.update()
@@ -258,12 +266,15 @@ class AlphaDoom(object):
             # Setup variables
             self.game.new_episode()
             frame = self.preprocess()
+            frames = []
             # Init stack of 4 frames
-            frames = [frame, frame, frame, frame]
+            for i in cfg.num_frames:
+                frames.append(frame)
 
             while not self.game.is_episode_finished():
                 s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
-                _ = self.perform_action(s)
+                a = self.simulation(s)
+                z = self.perform_action(a)
                 
                 # Update frames with latest image
                 if self.game.get_state() is not None:

@@ -32,6 +32,10 @@ train_arg.add_argument("--batch_size", type=int,
                        default=8,
                        help="Positions in queue to be evaluated at a time")
 
+train_arg.add_argument("--mini_batch_size", type=int,
+                       default=2048,
+                       help="States to sample from replay memory")
+
 train_arg.add_argument("--episodes", type=int,
                        default=1000,
                        help="Number of episodes to train on")
@@ -52,6 +56,10 @@ train_arg.add_argument("--T", type=float,
                        default=1.0,
                        help="Temperature for exploration. Starts at 1 for 30n, then T -> 0")
 
+train_arg.add_argument("--c", type=float,
+                       default=1e-4,
+                       help="Hyperparameter for L2 weight regularization")
+
 train_arg.add_argument("--log_dir", type=str,
                        default="./logs/",
                        help="Directory to save logs")
@@ -65,8 +73,16 @@ train_arg.add_argument("--save_dir", type=str,
                        help="Directory to save current model")
 
 train_arg.add_argument("--save_freq", type=int,
-                       default=100,
-                       help="Number of episodes before saving model")
+                       default=1000,
+                       help="Number of episodes before saving / evaluating current model")
+
+train_arg.add_argument("--num_eval", type=int,
+                       default=400,
+                       help="Number of evaluations between best and current model")
+
+train_arg.add_argument("--eval_thres", type=int,
+                       default=0.55,
+                       help="Percent of games won by current model to become new best model")
 
 train_arg.add_argument("-f", "--extension", type=str,
                        default=None,
@@ -107,13 +123,19 @@ model_arg.add_argument("--init", type=str,
                        choices=["glorot_normal", "glorot_uniform", "random_normal", "random_uniform", "truncated_normal"],
                        help="Initialization function to use")
 
-model_arg.add_argument("--loss", type=str,
+model_arg.add_argument("--loss1", type=str,
                        default="huber",
-                       choices=["huber", "mse", "softmax"],
+                       choices=["huber", "mse"],
+                       help="Chosen loss")
+
+model_arg.add_argument("--loss2", type=str,
+                       default="softmax",
+                       choices=["softmax", "sigmoid", "sparse"],
                        help="Chosen loss")
 
 model_arg.add_argument("--losses",
-                       default={"huber":tf.losses.huber_loss, "mse":tf.losses.mean_squared_error, "softmax":tf.losses.softmax_cross_entropy},
+                       default={"huber":tf.losses.huber_loss, "mse":tf.losses.mean_squared_error, "softmax":tf.losses.softmax_cross_entropy,
+                        "sigmoid":tf.losses.sigmoid_cross_entropy, "sparse":tf.losses.sparse_softmax_cross_entropy},
                        help="Loss options")
 
 model_arg.add_argument("--optim", type=str,
@@ -134,7 +156,7 @@ model_arg.add_argument("--skiprate", type=int,
                        help="Number of frames to skip during each action. Current action will be repeated for duration of skip")
 
 model_arg.add_argument("--num_frames", type=int,
-                       default=4,
+                       default=7,
                        help="Number of stacked frames to send to CNN, depicting history")
 
 # ----------------------------------------
