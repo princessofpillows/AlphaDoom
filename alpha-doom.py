@@ -36,41 +36,41 @@ class MCTS(object):
         def increment(self):
             self.n += 1
         
-        # N is the summation of all visits from root to curr node
         # V(s, a) = Q(s, a) + U(s, a)
-        def value(self, N):
-            return self.q + cfg.Cpuct * self.p * (np.sqrt(N + self.n) / (1 + self.n))
+        def value(self):
+            return self.q + cfg.Cpuct * self.p * (np.sqrt(self.parent.n) / (1 + self.n))
 
     def __init__(self):
-        self.root = Node()
+        self.root = MCTS.Node()
+        self.curr = self.root
         self.alphadoom = alphadoom()
 
-    def select(self, parent, N):
-        max_v = 0
+    def select(self, parent):
+        v = []
         for child in parent.children:
-            v = child.value(N)
-            if v > max_v:
-                max_v = v
-                selected = child
+            v.append(child.value())
 
-        return selected
+        v = np.asarray(v)
+        v_max = np.where(v == np.max(v))
+        if len(v_max) > 0:
+            return np.random.choice(v_max)
+        return v_max
 
     def expand(self, parent, p):
-        child = Node(parent, None, p)
+        child = MCTS.Node(parent, None, p)
         parent.add_child(child)
     
     def search(self):
         # Select
-        N = 0
-        curr = self.root
-        while(curr.children != [])
-            curr = select(curr, N)
-            N += curr.n
+        while(curr.children != []):
+            curr = select(curr)
         
         # Expand and Evaluate
         s, v, p_set = self.alphadoom.eval(curr)
         curr.s = s
         for p in p_set:
+            # Add Dirichlet noise
+            p = (1 - cfg.eps) * p + cfg.eps * np.random.dirichlet(cfg.d_noise)
             expand(curr, p)
 
         # Backpropogation
@@ -81,13 +81,49 @@ class MCTS(object):
         
         # Play
         best_s = 0
-        for child in self.root:
-            s = np.power(child.n, 1 / cfg.T) / np.power(child.n + self.root.n, 1 / cfg.T)
-            if s > best_s:
-                best_s = s
+        most_n = 0
+        selection = None
+        # Deterministic selection
+        if cfg.eval:
+            for child in self.root.children:
+                if child.n > most_n:
+                    most_n = child.n
+                    selection = child
+        # Stochastic selection
+        else:
+            for child in self.root.children:
+                s = np.power(child.n, 1 / cfg.T) / np.power(self.root.n, 1 / cfg.T)
+                if s > best_s:
+                    best_s = s
+                    selection = child
 
-        self.root = best_s
+        self.curr = selection
         self.alphadoom.move(best_s)
+
+
+class replay_memory(object):
+
+    def __init__(self, cfg):
+        cfg = cfg
+        self.memory = []
+
+    def push(self, exp):
+        size = len(self.memory)
+        # Remove oldest memory first
+        if size == cfg.cap:
+            self.memory.pop(random.randint(0, size-1))
+        self.memory.append(exp)
+    
+    def fetch(self):
+        size = len(self.memory)
+        # Select batch
+        if size < cfg.batch_size:
+            batch = random.sample(self.memory, size)
+        else:
+            batch = random.sample(self.memory, cfg.batch_size)
+        # Return batch
+        batch = np.asarray(batch, dtype=object)
+        return zip(*batch)
 
 
 class alphadoom(object):
@@ -102,29 +138,34 @@ class alphadoom(object):
         self.global_step = tf.train.get_or_create_global_step()
         self.terminal = tf.zeros([84, 84, 1])
 
-        # Create network
-        self.model = AlphaGoZero(self.cfg, len(cfg.actions))
+        # Assign replay to CPU due to GPU memory limitations
+        with tf.device('CPU:0'):
+            self.replay_memory = replay_memory(cfg)
+
+        # Load selected model
+        self.model = cfg.models[cfg.model](cfg, len(cfg.actions))
         self.model.build((None,) + self.model.shape + (4,))
-        self.optimizer = tf.train.AdamOptimizer(self.cfg.learning_rate)
+        self.loss = cfg.losses[cfg.loss]
+        self.optimizer = cfg.optims[cfg.optim](cfg.learning_rate)
 
         self.build_writers()
 
     def build_writers(self):
-        if not Path(self.cfg.save_dir).is_dir():
-            os.mkdir(self.cfg.save_dir)
-        if self.cfg.extension is None:
-            self.cfg.extension = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
+        if not Path(cfg.save_dir).is_dir():
+            os.mkdir(cfg.save_dir)
+        if cfg.extension is None:
+            cfg.extension = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
 
-        self.log_path = self.cfg.log_dir + self.cfg.extension
+        self.log_path = cfg.log_dir + cfg.extension
         self.writer = tf.contrib.summary.create_file_writer(self.log_path)
         self.writer.set_as_default()
 
-        self.save_path = self.cfg.save_dir + self.cfg.extension
+        self.save_path = cfg.save_dir + cfg.extension
         self.ckpt_prefix = self.save_path + '/ckpt'
         self.saver = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model, optimizer_step=self.global_step)
 
     def logger(self, tape, loss):
-        with tf.contrib.summary.record_summaries_every_n_global_steps(self.cfg.log_freq, self.global_step):
+        with tf.contrib.summary.record_summaries_every_n_global_steps(cfg.log_freq, self.global_step):
             # Log vars
             tf.contrib.summary.scalar('loss', loss)
 
@@ -167,7 +208,7 @@ class alphadoom(object):
             target_q = tf.stop_gradient(target_q)
 
             # Compare target q and predicted q (q = 0 on terminal state)
-            loss = 1/2 * tf.reduce_mean(tf.losses.huber_loss(rewards + self.cfg.discount * target_q, q)) - entropy * self.cfg.entropy_rate
+            loss = 1/2 * tf.reduce_mean(tf.losses.huber_loss(rewards + cfg.discount * target_q, q)) - entropy * cfg.entropy_rate
         
         self.logger(tape, loss)
         # Compute/apply gradients
@@ -180,10 +221,10 @@ class alphadoom(object):
     def perform_action(self, frames):
         logits, _ = self.model(frames)
         # One-hot action
-        choice = np.zeros(len(self.cfg.actions))
+        choice = np.zeros(len(cfg.actions))
         choice[tuple(cols)] += 1
         # Take action
-        z = self.game.make_action(choice, self.cfg.skiprate)
+        z = self.game.make_action(choice, cfg.skiprate)
         # Modify rewards (game is blackbox)
         '''
         if reward > 50:
@@ -203,10 +244,10 @@ class alphadoom(object):
         return frame
     
     def train(self):
-        self.saver.restore(tf.train.latest_checkpoint(self.cfg.save_dir))
-        for episode in trange(self.cfg.episodes):
+        self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
+        for episode in trange(cfg.episodes):
             # Save model
-            if episode % self.cfg.save_freq == 0:
+            if episode % cfg.save_freq == 0:
                 self.saver.save(file_prefix=self.ckpt_prefix)
 
             # Setup variables
@@ -216,7 +257,7 @@ class alphadoom(object):
             frames = [frame, frame, frame, frame]
 
             while not self.game.is_episode_finished():
-                s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], self.cfg.num_frames])
+                s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
                 z = self.perform_action(s)
 
                 # Update frames with latest image
@@ -235,9 +276,9 @@ class alphadoom(object):
         self.saver.save(file_prefix=self.ckpt_prefix)
 
     def test(self):
-        self.saver.restore(tf.train.latest_checkpoint(self.cfg.save_dir))
+        self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
         rewards = []
-        for _ in trange(self.cfg.test_episodes):
+        for _ in trange(cfg.test_episodes):
             # Setup variables
             self.game.new_episode()
             frame = self.preprocess()
@@ -245,7 +286,7 @@ class alphadoom(object):
             frames = [frame, frame, frame, frame]
 
             while not self.game.is_episode_finished():
-                s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], self.cfg.num_frames])
+                s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
                 _ = self.perform_action(s)
                 
                 # Update frames with latest image
@@ -254,9 +295,9 @@ class alphadoom(object):
                     frames.append(self.preprocess())
 
             rewards.append(self.game.get_total_reward())
-        print("Average Reward: ", sum(rewards)/self.cfg.test_episodes)
+        print("Average Reward: ", sum(rewards)/cfg.test_episodes)
 
-def main(cfg):
+def main():
     mcts = MCTS()
 
 if __name__ == "__main__":

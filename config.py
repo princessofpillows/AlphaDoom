@@ -1,6 +1,7 @@
 
 import argparse
 import tensorflow as tf
+from models import Atari, AlphaGoZero
 
 # ----------------------------------------
 # Global variables
@@ -35,13 +36,21 @@ train_arg.add_argument("--episodes", type=int,
                        default=1000,
                        help="Number of episodes to train on")
 
+train_arg.add_argument("--eps", type=float,
+                       default=0.25,
+                       help="Epsilon for Dirichlet noise equation")
+
+train_arg.add_argument("--d_noise", type=float,
+                       default=0.03,
+                       help="Strength of Dirichlet noise function")
+
 train_arg.add_argument("--Cpuct", type=float,
                        default=0.99,
                        help="Constant for determing exploration rate")
 
-train_arg.add_argument("--T", type=int,
-                       default=0.99,
-                       help="Temperature for exploration")
+train_arg.add_argument("--T", type=float,
+                       default=1.0,
+                       help="Temperature for exploration. Starts at 1 for 30n, then T -> 0")
 
 train_arg.add_argument("--log_dir", type=str,
                        default="./logs/",
@@ -77,8 +86,16 @@ model_arg = add_argument_group("Model")
 
 model_arg.add_argument("--model", type=str,
                        default="atari",
-                       choices=["atari", "alexnet", "zfnet", "vggnet", "googlenet"],
-                       help="CNN architecture to use")
+                       choices=["atari"],
+                       help="Chosen architecture")
+
+model_arg.add_argument("--models",
+                       default={"atari":Atari, "alphagozero":AlphaGoZero},
+                       help="Architecture options")
+
+model_arg.add_argument("--resolutions",
+                       default={"atari":(84,84), "alphagozero":(16,16)},
+                       help="Resolution for chosen architecture")
 
 model_arg.add_argument("--activ", type=str,
                        default="relu",
@@ -89,6 +106,24 @@ model_arg.add_argument("--init", type=str,
                        default="glorot_normal",
                        choices=["glorot_normal", "glorot_uniform", "random_normal", "random_uniform", "truncated_normal"],
                        help="Initialization function to use")
+
+model_arg.add_argument("--loss", type=str,
+                       default="huber",
+                       choices=["huber", "mse", "softmax"],
+                       help="Chosen loss")
+
+model_arg.add_argument("--losses",
+                       default={"huber":tf.losses.huber_loss, "mse":tf.losses.mean_squared_error, "softmax":tf.losses.softmax_cross_entropy},
+                       help="Loss options")
+
+model_arg.add_argument("--optim", type=str,
+                       default="stoch",
+                       choices=["stoch", "adam"],
+                       help="Chosen optimizer")
+
+model_arg.add_argument("--optims",
+                       default={"adam":tf.train.AdamOptimizer, "stoch": tf.train.GradientDescentOptimizer},
+                       help="Optimizer options")
 
 model_arg.add_argument("--actions", type=int,
                        default=[shoot, left, right],
