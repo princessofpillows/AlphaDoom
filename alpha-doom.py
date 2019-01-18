@@ -43,7 +43,6 @@ class MCTS(object):
     def __init__(self):
         self.root = MCTS.Node()
         self.curr = self.root
-        self.alphadoom = alphadoom()
 
     def select(self, parent):
         v = []
@@ -62,22 +61,24 @@ class MCTS(object):
     
     def search(self):
         # Select
-        while(curr.children != []):
-            curr = select(curr)
+        while(self.curr.children != []):
+            self.curr = select(self.curr)
         
+        return self.curr
+    
+    def update(self, s, v, p_set):
         # Expand and Evaluate
-        s, v, p_set = self.alphadoom.eval(curr)
-        curr.s = s
+        self.curr.s = s
         for p in p_set:
             # Add Dirichlet noise
             p = (1 - cfg.eps) * p + cfg.eps * np.random.dirichlet(cfg.d_noise)
-            expand(curr, p)
+            expand(self.curr, p)
 
         # Backpropogation
-        while curr.parent != None:
-            curr.increment()
-            curr.update(v)
-            curr = curr.parent
+        while self.curr.parent != None:
+            self.curr.increment()
+            self.curr.update(v)
+            self.curr = self.curr.parent
         
         # Play
         best_s = 0
@@ -85,26 +86,24 @@ class MCTS(object):
         selection = None
         # Deterministic selection
         if cfg.eval:
-            for child in self.root.children:
+            for child in self.curr.children:
                 if child.n > most_n:
                     most_n = child.n
                     selection = child
         # Stochastic selection
         else:
-            for child in self.root.children:
+            for child in self.curr.children:
                 s = np.power(child.n, 1 / cfg.T) / np.power(self.root.n, 1 / cfg.T)
                 if s > best_s:
                     best_s = s
                     selection = child
 
         self.curr = selection
-        self.alphadoom.move(best_s)
 
 
 class replay_memory(object):
 
-    def __init__(self, cfg):
-        cfg = cfg
+    def __init__(self):
         self.memory = []
 
     def push(self, exp):
@@ -126,10 +125,10 @@ class replay_memory(object):
         return zip(*batch)
 
 
-class alphadoom(object):
+class AlphaDoom(object):
 
     def __init__(self):
-        super(alphadoom, self).__init__()
+        super(AlphaDoom, self).__init__()
 
         self.game = vzd.DoomGame()
         self.game.load_config('vizdoom/scenarios/basic.cfg')
@@ -138,9 +137,10 @@ class alphadoom(object):
         self.global_step = tf.train.get_or_create_global_step()
         self.terminal = tf.zeros([84, 84, 1])
 
-        # Assign replay to CPU due to GPU memory limitations
+        # Assign CPU due to GPU memory limitations
         with tf.device('CPU:0'):
-            self.replay_memory = replay_memory(cfg)
+            self.mcts = MCTS()
+            self.replay_memory = replay_memory()
 
         # Load selected model
         self.model = cfg.models[cfg.model](cfg, len(cfg.actions))
@@ -182,32 +182,10 @@ class alphadoom(object):
     def update(self):
         with tf.device('CPU:0'):
             # Fetch batch of experiences
-            s0, logits, rewards, s1 = self.replay_memory.fetch()
+            s, p, z = self.replay_memory.fetch()
         
-        # Get entropy
-        probs = tf.nn.softmax(logits)
-        entropy = -1 * tf.reduce_sum(probs*tf.math.log(probs + 1e-20))
         # Construct graph
         with tf.GradientTape() as tape:
-            # Get predicted q values
-            logits, _ = self.model(s0)
-            # Choose max q values for all batches
-            rows = tf.range(tf.shape(logits)[0])
-            cols = tf.argmax(logits, 1, output_type=tf.int32)
-            rows_cols = tf.stack([rows, cols], axis=1)
-            q = tf.gather_nd(logits, rows_cols)
-
-            # Get target q values
-            target_logits, _ = self.target(s1)
-            rows = tf.range(tf.shape(target_logits)[0])
-            # Using columns of selected actions from prediction, stack with target rows
-            rows_cols = tf.stack([rows, cols], axis=1)
-            # Slice Q values, with actions chosen by prediction
-            target_q = tf.gather_nd(logits, rows_cols)
-            # Kill target network gradient
-            target_q = tf.stop_gradient(target_q)
-
-            # Compare target q and predicted q (q = 0 on terminal state)
             loss = 1/2 * tf.reduce_mean(tf.losses.huber_loss(rewards + cfg.discount * target_q, q)) - entropy * cfg.entropy_rate
         
         self.logger(tape, loss)
@@ -218,22 +196,18 @@ class alphadoom(object):
 
         self.global_step.assign_add(1)
 
+    def simulation(self):
+        curr = self.mcts.search()
+        s, v, p_set = self.model(curr)
+        self.mcts.update(s, v, p_set)
+
     def perform_action(self, frames):
-        logits, _ = self.model(frames)
+        p = self.model(frames)
         # One-hot action
         choice = np.zeros(len(cfg.actions))
         choice[tuple(cols)] += 1
         # Take action
         z = self.game.make_action(choice, cfg.skiprate)
-        # Modify rewards (game is blackbox)
-        '''
-        if reward > 50:
-            reward = 10
-        elif reward < -6:
-            reward = -3
-        else:
-            reward = -1
-        '''
         return z
     
     def preprocess(self):
@@ -263,12 +237,14 @@ class alphadoom(object):
                 # Update frames with latest image
                 prev_frames = frames[:]
                 frames.pop(0)
-                # Reached terminal state, kill q values
+                # Reached terminal state, kill gradient
                 if self.game.get_state() is None:
                     frames = [self.terminal, self.terminal, self.terminal, self.terminal]
                     logits = tf.zeros(logits.shape)
                 else:
                     frames.append(self.preprocess())
+
+                self.replay_memory.push([s, p, z])
                 
             # Train on experiences from memory
             self.update()
@@ -298,7 +274,7 @@ class alphadoom(object):
         print("Average Reward: ", sum(rewards)/cfg.test_episodes)
 
 def main():
-    mcts = MCTS()
+    model = AlphaDoom()
 
 if __name__ == "__main__":
     main()

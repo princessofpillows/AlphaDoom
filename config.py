@@ -138,6 +138,14 @@ model_arg.add_argument("--num_frames", type=int,
                        help="Number of stacked frames to send to CNN, depicting history")
 
 # ----------------------------------------
+# Arguments for memory
+mem_arg = add_argument_group("Memory")
+
+mem_arg.add_argument("--cap", type=int,
+                       default=500000,
+                       help="Maximum number of transitions in replay memory")
+
+# ----------------------------------------
 # Function to be called externally
 def get_config():
     config, unparsed = parser.parse_known_args()

@@ -2,3 +2,5 @@ vizdoom/
 *.ini
 __pycache__/
 *.pyc
+logs/
+saves/
