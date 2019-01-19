@@ -24,9 +24,18 @@ def add_argument_group(name):
 # Arguments for training
 train_arg = add_argument_group("Training")
 
-train_arg.add_argument("--learning_rate", type=float,
-                       default=1e-4,
-                       help="Learning rate (gradient step size)")
+train_arg.add_argument("--learning_rate", type=int,
+                       default=0,
+                       choices=[0, 1, 2],
+                       help="Learning rate settings")
+
+train_arg.add_argument("--lr_schedule",
+                       default={"0":(1e-2, 0), "1":(1e-3, 400000), "2":(1e-4, 600000)},
+                       help="Learning rate annealing schedule")
+
+train_arg.add_argument("--momentum", type=float,
+                       default=0.9,
+                       help="Hyperparameter for momentum")
 
 train_arg.add_argument("--batch_size", type=int,
                        default=8,
@@ -36,8 +45,12 @@ train_arg.add_argument("--mini_batch_size", type=int,
                        default=2048,
                        help="States to sample from replay memory")
 
+train_arg.add_argument("--num_sims", type=int,
+                       default=1600,
+                       help="Number of simulations to run before selecting action")
+
 train_arg.add_argument("--episodes", type=int,
-                       default=1000,
+                       default=100000,
                        help="Number of episodes to train on")
 
 train_arg.add_argument("--eps", type=float,

@@ -42,7 +42,7 @@ class MCTS(object):
 
     def __init__(self):
         self.root = MCTS.Node()
-        self.curr = self.root
+        self.curr_root = self.root
 
     def select(self, parent):
         v = []
@@ -51,54 +51,49 @@ class MCTS(object):
 
         v = np.asarray(v)
         v_max = np.where(v == np.max(v))
-        if len(v_max) > 0:
+        if len(v_max) > 1:
             return np.random.choice(v_max)
-        return v_max
+        return v_max[0]
 
     def expand(self, parent, p):
         child = MCTS.Node(parent, None, p)
         parent.add_child(child)
     
     def search(self):
-        # Select
-        while(self.curr.children != []):
-            self.curr = select(self.curr)
+        # Find leaf
+        curr = self.curr_root
+        while(curr.children != []):
+            curr = select(curr)
         
-        return self.curr
+        return curr
     
-    def update(self, s, v, p_set):
-        # Expand and Evaluate
-        self.curr.s = s
+    def update(self, leaf, s, v, p_set):
+        # Expand node and evaluate
         for p in p_set:
-            # Add Dirichlet noise
+            # Add dirichlet noise
             p = (1 - cfg.eps) * p + cfg.eps * np.random.dirichlet(cfg.d_noise)
-            expand(self.curr, p)
+            expand(leaf, p)
 
         # Backpropogation
-        while self.curr.parent != None:
-            self.curr.increment()
-            self.curr.update(v)
-            self.curr = self.curr.parent
+        curr = leaf
+        while curr.parent != None:
+            curr.increment()
+            curr.update(v)
+            curr = curr.parent
         
+    def select(self):
         # Play
         best_s = 0
-        most_n = 0
         selection = None
-        # Deterministic selection
-        if cfg.eval:
-            for child in self.curr.children:
-                if child.n > most_n:
-                    most_n = child.n
-                    selection = child
-        # Stochastic selection
-        else:
-            for child in self.curr.children:
-                s = np.power(child.n, 1 / cfg.T) / np.power(self.root.n, 1 / cfg.T)
-                if s > best_s:
-                    best_s = s
-                    selection = child
+        # When T is 0, becomes deterministic instead of stochastic
+        for child in self.curr_root.children:
+            s = np.pow(child.n, 1 / cfg.T) / np.pow(self.root.n, 1 / cfg.T)
+            if s > best_s:
+                best_s = s
+                selection = child
 
-        self.curr = selection
+        self.curr_root = selection
+        return selection, np.pow(selection.n, 1 / cfg.T)
 
 
 class replay_memory(object):
@@ -148,7 +143,8 @@ class AlphaDoom(object):
         self.model.build((None,) + self.model.shape + (cfg.num_frames,))
         self.loss1 = cfg.losses[cfg.loss1]
         self.loss2 = cfg.losses[cfg.loss2]
-        self.optimizer = cfg.optims[cfg.optim](cfg.learning_rate)
+        self.learning_rate = cfg.lr_schedule[str(cfg.learning_rate)]
+        self.optimizer = cfg.optims[cfg.optim](self.learning_rate)
 
         self.build_writers()
 
@@ -197,23 +193,27 @@ class AlphaDoom(object):
         self.optimizer.apply_gradients(grads_and_vars)
 
         self.global_step.assign_add(1)
+    
+    def simulation(self, s):
+        for i in range(cfg.num_sims):
+            leaf = self.mcts.search()
+            # TODO ********* need some way of acquiring s for a simulated sequence of actions *********
+            leaf.s = s
+            p, v = self.model(s)
+            self.mcts.update(leaf, v, p_set)
 
-    def simulation(self):
-        curr = self.mcts.search()
-        s = 0
-        p, v = self.model(curr)
-        self.mcts.update(s, v, p_set)
-
-    def perform_action(self, a):
+    def perform_action(self, s):
+        simulation(s)
+        selection, pi = self.mcts.select()
         # One-hot action
         choice = np.zeros(len(cfg.actions))
         choice[tuple(a)] += 1
         # Take action
         reward = self.game.make_action(choice, cfg.skiprate)
         if reward > 0:
-            return 1
+            return selection.s, pi, 1
         else:
-            return -1
+            return selection.s, pi, -1
     
     def preprocess(self):
         screen = self.game.get_state().screen_buffer
@@ -223,11 +223,63 @@ class AlphaDoom(object):
         return frame
     
     def evaluate(self):
-        return False
+        old_T = cfg.T
+        cfg.T = 0
+        p1_wins = 0
+        p2_wins = 0
+        for game in range(cfg.num_eval):
+            # Setup variables
+            self.game.new_episode()
+            frame = self.preprocess()
+            frames = []
+            # Init stack of 4 frames
+            for i in range(cfg.num_frames):
+                frames.append(frame)
+            
+            p1_frames = frames
+            p2_frames = frames
+            
+            # Alternate between players
+            while True:
+                # P1
+                curr = tf.zeros([84, 84, 1])
+                s = tf.reshape(p1_frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames, curr])
+                _, _, _ = self.perform_action(s)
+
+                if self.game.is_episode_finished():
+                    p1_wins += 1
+                    break
+
+                p1_frames.pop(0)
+                # TODO ******** Add support for multiple players in preprocess *********
+                p1_frames.append(self.preprocess())
+
+                # P2
+                curr = tf.ones([84, 84, 1])
+                s = tf.reshape(p2_frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames, curr])
+                _, _, _ = self.perform_action(s)
+
+                if self.game.is_episode_finished():
+                    p2_wins += 1
+                    break
+
+                p2_frames.pop(0)
+                p2_frames.append(self.preprocess())
+        
+        cfg.T = old_T
+        if (p1_wins / p2_wins) > 0.55 :
+            return True
+        else:
+            return False
     
     def train(self):
         self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
         for episode in trange(cfg.episodes):
+            # Update learning rate at scheduled times
+            if episode % cfg.lr_schedule[str(cfg.learning_rate)][1] == 0:
+                cfg.learning_rate += 1
+                self.learning_rate = cfg.lr_schedule[str(cfg.learning_rate)][0]
+
             # Save model
             if episode % cfg.save_freq == 0:
                 # Check if new model is improvement over current best
@@ -239,13 +291,12 @@ class AlphaDoom(object):
             frame = self.preprocess()
             frames = []
             # Init stack of 4 frames
-            for i in cfg.num_frames:
+            for i in range(cfg.num_frames):
                 frames.append(frame)
 
             while not self.game.is_episode_finished():
                 s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
-                a = self.simulation(s)
-                z = self.perform_action(a)
+                s, pi, z = self.perform_action(s)
 
                 # Update frames with latest image
                 if self.game.get_state() is not None:
@@ -260,8 +311,8 @@ class AlphaDoom(object):
         self.saver.save(file_prefix=self.ckpt_prefix)
 
     def test(self):
-        self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
         rewards = []
+        self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
         for _ in trange(cfg.test_episodes):
             # Setup variables
             self.game.new_episode()
@@ -273,7 +324,6 @@ class AlphaDoom(object):
 
             while not self.game.is_episode_finished():
                 s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
-                a = self.simulation(s)
                 z = self.perform_action(a)
                 
                 # Update frames with latest image
