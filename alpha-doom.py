@@ -4,6 +4,7 @@ import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 import random, os
+from tensorboardX import SummaryWriter
 from datetime import datetime
 from pathlib import Path
 from tqdm import trange
@@ -183,28 +184,31 @@ class AlphaDoom(object):
         if cfg.extension is None:
             cfg.extension = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
 
-        self.log_path = cfg.log_dir + cfg.extension
-        self.writer = tf.contrib.summary.create_file_writer(self.log_path)
-        self.writer.set_as_default()
-
-        self.save_path = cfg.save_dir + cfg.extension
-        self.ckpt_prefix = self.save_path + '/ckpt'
+        save_path = cfg.save_dir + cfg.extension
+        self.ckpt_prefix = save_path + '/ckpt'
         self.saver = tf.train.Checkpoint(model=self.model, optimizer=self.optimizer, optimizer_step=self.global_step)
 
-    def logger(self, tape, loss):
-        with tf.contrib.summary.record_summaries_every_n_global_steps(cfg.log_freq, self.global_step):
-            # Log vars
-            tf.contrib.summary.scalar('loss', loss)
+        log_path = cfg.log_dir + cfg.extension
+        self.writer = SummaryWriter(log_path)
 
-            # Log weights
+    def logger(self, tape, loss):
+        if self.global_step % cfg.log_freq == 0:
+            # Log scalars
+            self.writer.add_scalar('loss', loss, self.global_step)
+
+            # Log state
+            s = tf.reshape(self.frames, [cfg.num_frames, self.model.shape[0], self.model.shape[1]])
+            self.writer.add_image('state', s, self.global_step)
+            
+            # Log weight scalars
             slots = self.optimizer.get_slot_names()
             for variable in tape.watched_variables():
-                    tf.contrib.summary.scalar(variable.name, tf.nn.l2_loss(variable))
+                    self.writer.add_scalar(variable.name, tf.nn.l2_loss(variable))
 
                     for slot in slots:
                         slotvar = self.optimizer.get_slot(variable, slot)
                         if slotvar is not None:
-                            tf.contrib.summary.scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
+                            self.writer.add_scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
 
     def update(self):
         # Fetch batch of experiences
@@ -318,19 +322,19 @@ class AlphaDoom(object):
             # Setup variables
             self.game.new_episode()
             frame = self.preprocess()
-            frames = []
+            self.frames = []
             # Init stack of 4 frames
             for i in range(cfg.num_frames):
-                frames.append(frame)
+                self.frames.append(frame)
 
             while not self.game.is_episode_finished():
-                s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
+                s = tf.reshape(self.frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
                 s, pi, z = self.perform_action(s)
 
                 # Update frames with latest image
                 if self.game.get_state() is not None:
-                    frames.pop(0)
-                    frames.append(self.preprocess())
+                    self.frames.pop(0)
+                    self.frames.append(self.preprocess())
 
                 self.replay_memory.push([s, pi, z])
                 
