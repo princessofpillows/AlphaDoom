@@ -103,7 +103,7 @@ class MCTS(object):
         def iterate_children(self, G, parent):
             # Recursively add children to graph
             for child in parent.children:
-                G.add_node(child.w)
+                G.add_node([child.w, child.n])
                 G.add_edge(parent.w, child.w, object=child.p)
                 G = iterate_children(G, child)
             return G
@@ -126,7 +126,7 @@ class MCTS(object):
         plt.show()
 
 
-class replay_memory(object):
+class replay(object):
 
     def __init__(self):
         self.memory = []
@@ -166,7 +166,7 @@ class AlphaDoom(object):
         # Assign mcts, memory to CPU due to GPU memory limitations
         with tf.device('CPU:0'):
             self.mcts = MCTS()
-            self.replay_memory = replay_memory()
+            self.replay = replay()
 
         # Load selected model
         self.model = cfg.models[cfg.model](cfg, len(cfg.actions))
@@ -184,8 +184,8 @@ class AlphaDoom(object):
         if cfg.extension is None:
             cfg.extension = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
 
-        save_path = cfg.save_dir + cfg.extension
-        self.ckpt_prefix = save_path + '/ckpt'
+        self.save_path = cfg.save_dir + cfg.extension
+        self.ckpt_prefix = self.save_path + '/ckpt'
         self.saver = tf.train.Checkpoint(model=self.model, optimizer=self.optimizer, optimizer_step=self.global_step)
 
         log_path = cfg.log_dir + cfg.extension
@@ -197,8 +197,9 @@ class AlphaDoom(object):
             self.writer.add_scalar('loss', loss, self.global_step)
 
             # Log state
-            s = tf.reshape(self.frames, [cfg.num_frames, self.model.shape[0], self.model.shape[1]])
-            self.writer.add_image('state', s, self.global_step)
+            for i in range(self.frames):
+                s = tf.reshape(self.frames[i], [3, self.model.shape[0], self.model.shape[1]])
+                self.writer.add_image('state ' + 'n-' + str(i), s, self.global_step)
             
             # Log weight scalars
             slots = self.optimizer.get_slot_names()
@@ -212,7 +213,7 @@ class AlphaDoom(object):
 
     def update(self):
         # Fetch batch of experiences
-        s, pi, z = self.replay_memory.fetch()
+        s, pi, z = self.replay.fetch()
         
         # Construct graph
         with tf.GradientTape() as tape:
@@ -307,6 +308,8 @@ class AlphaDoom(object):
     
     def train(self):
         self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
+        with open(self.save_path + 'replay.pkl', 'rb') as f:
+            self.replay.memory = pickle.load(f)
         for episode in trange(cfg.episodes):
             # Update learning rate at scheduled times
             if episode % cfg.lr_schedule[str(cfg.learning_rate)][1] == 0:
@@ -318,6 +321,8 @@ class AlphaDoom(object):
                 # Check if new model is improvement over current best
                 if self.evaluate():
                     self.saver.save(file_prefix=self.ckpt_prefix)
+                    with open(self.save_path + 'replay.pkl', 'wb') as f:
+                        pickle.dump(self.replay.memory, f)
 
             # Setup variables
             self.game.new_episode()
@@ -336,7 +341,7 @@ class AlphaDoom(object):
                     self.frames.pop(0)
                     self.frames.append(self.preprocess())
 
-                self.replay_memory.push([s, pi, z])
+                self.replay.push([s, pi, z])
                 
             # Train on experiences from memory
             self.update()
