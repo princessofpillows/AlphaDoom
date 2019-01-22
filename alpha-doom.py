@@ -1,6 +1,8 @@
 import vizdoom as vzd
 import tensorflow as tf
 import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
 import random, os
 from datetime import datetime
 from pathlib import Path
@@ -54,7 +56,7 @@ class MCTS(object):
         if len(v_max) > 1:
             return np.random.choice(v_max)
         return v_max[0]
-
+    
     def expand(self, parent, p):
         child = MCTS.Node(parent, None, p)
         parent.add_child(child)
@@ -94,6 +96,33 @@ class MCTS(object):
 
         self.curr_root = selection
         return selection, np.pow(selection.n, 1 / cfg.T)
+    
+    def visualize_tree(self):
+
+        def iterate_children(self, G, parent):
+            # Recursively add children to graph
+            for child in parent.children:
+                G.add_node(child.w)
+                G.add_edge(parent.w, child.w, object=child.p)
+                G = iterate_children(G, child)
+            return G
+
+        # Entire game tree visualization
+        tree = nx.Graph()
+        tree.add_node(self.root.w)
+        tree = iterate_children(tree, self.root)
+        nx.draw(tree, with_labels=True)
+        plt.show()
+
+    def visualize(self):
+        # Local action tree visualization
+        G = nx.Graph()
+        G.add_node(self.curr_root.w)
+        for child in self.curr_root.children:
+            G.add_node(child.w)
+            G.add_edge(self.curr_root.w, child.w, object=child.p)
+        nx.draw(G, with_labels=True)
+        plt.show()
 
 
 class replay_memory(object):
