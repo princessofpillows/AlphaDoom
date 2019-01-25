@@ -113,7 +113,7 @@ class MCTS(object):
         tree.add_node(self.root.w)
         tree = iterate_children(tree, self.root)
         nx.draw(tree, with_labels=True)
-        plt.show()
+        return tree
 
     def visualize(self):
         # Local action tree visualization
@@ -123,7 +123,7 @@ class MCTS(object):
             G.add_node(child.w)
             G.add_edge(self.curr_root.w, child.w, object=child.p)
         nx.draw(G, with_labels=True)
-        plt.show()
+        return tree
 
 
 class replay(object):
@@ -145,8 +145,7 @@ class replay(object):
             batch = random.sample(self.memory, size)
         else:
             batch = random.sample(self.memory, cfg.batch_size)
-        # Return batch
-        batch = np.asarray(batch, dtype=object)
+            
         return zip(*batch)
 
 
@@ -190,34 +189,39 @@ class AlphaDoom(object):
 
         log_path = cfg.log_dir + cfg.extension
         self.writer = SummaryWriter(log_path)
-
+    
     def logger(self, tape, loss):
-        if self.global_step % cfg.log_freq == 0:
+        if self.global_step.numpy() % cfg.log_freq == 0:
             # Log scalars
-            self.writer.add_scalar('loss', loss, self.global_step)
+            self.writer.add_scalar('loss', loss.numpy(), self.global_step)
 
-            # Log state
-            for i in range(self.frames):
-                s = tf.reshape(self.frames[i], [3, self.model.shape[0], self.model.shape[1]])
-                self.writer.add_image('state ' + 'n-' + str(i), s, self.global_step)
+            # Log tree
+            tree = tensorboardX.utils.figure_to_image(visualize(), close=True)
+            self.writer.add_image('mcts', tree, self.global_step)
             
             # Log weight scalars
             slots = self.optimizer.get_slot_names()
             for variable in tape.watched_variables():
-                    self.writer.add_scalar(variable.name, tf.nn.l2_loss(variable))
+                    self.writer.add_scalar(variable.name, tf.nn.l2_loss(variable).numpy(), self.global_step)
 
                     for slot in slots:
                         slotvar = self.optimizer.get_slot(variable, slot)
                         if slotvar is not None:
-                            self.writer.add_scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
+                            self.writer.add_scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar).numpy(), self.global_step)
+
+    def log_state(self, frames):
+        # Log state
+        for i in range(len(frames)):
+            s = np.reshape(frames[i], [1, frames[i].shape[0], frames[i].shape[1]]).astype(np.uint8)
+            self.writer.add_image('state ' + 'n-' + str(i), s, self.global_step)
 
     def update(self):
         # Fetch batch of experiences
-        s, pi, z = self.replay.fetch()
+        s0, pi, z, s1 = self.replay.fetch()
         
         # Construct graph
         with tf.GradientTape() as tape:
-            p, v = self.model(s)
+            p, v = self.model(s0)
             loss = tf.reduce_mean(self.loss1(z, v) - self.loss2(tf.pow(pi, cfg.T), p) + cfg.c * tf.nn.l2_loss(self.model.weights))
         
         self.logger(tape, loss)
@@ -331,17 +335,23 @@ class AlphaDoom(object):
             # Init stack of 4 frames
             for i in range(cfg.num_frames):
                 self.frames.append(frame)
-
+            
+            count = 0
             while not self.game.is_episode_finished():
-                s = tf.reshape(self.frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
-                s, pi, z = self.perform_action(s)
+                s0 = tf.reshape(self.frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
+                s1, pi, z = self.perform_action(s0)
+
+                # Log frames
+                if count % self.cfg.num_frames == 0:
+                    self.log_state(frames)
 
                 # Update frames with latest image
                 if self.game.get_state() is not None:
                     self.frames.pop(0)
                     self.frames.append(self.preprocess())
 
-                self.replay.push([s, pi, z])
+                self.replay.push([s0, pi, z, s1])
+                count += 1
                 
             # Train on experiences from memory
             self.update()
