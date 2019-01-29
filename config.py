@@ -33,6 +33,18 @@ train_arg.add_argument("--lr_schedule",
                        default={"0":(1e-2, 0), "1":(1e-3, 400000), "2":(1e-4, 600000)},
                        help="Learning rate annealing schedule")
 
+train_arg.add_argument("--num_blks",
+                       default=5,
+                       help="Residual blocks in Autoencoder")
+
+train_arg.add_argument("--min_filters",
+                       default=16,
+                       help="Minimum number of filters in network")
+
+train_arg.add_argument("--max_filters",
+                       default=128,
+                       help="Maximum number of filters in network")
+
 train_arg.add_argument("--momentum", type=float,
                        default=0.9,
                        help="Hyperparameter for momentum")
@@ -171,6 +183,10 @@ model_arg.add_argument("--skiprate", type=int,
 model_arg.add_argument("--num_frames", type=int,
                        default=7,
                        help="Number of stacked frames to send to CNN, depicting history")
+
+model_arg.add_argument("--num_channels", type=int,
+                       default=3,
+                       help="Number of colour channels used [1, 3]")   
 
 # ----------------------------------------
 # Arguments for memory

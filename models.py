@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 from layers import Residual, Policy, Value
 
 class Atari(tf.keras.Model):
@@ -32,32 +33,13 @@ class AlphaGoZero(tf.keras.Model):
     def __init__(self, cfg, num_classes):
         super(AlphaGoZero, self).__init__()
         self.shape = (19, 19)
-        self.block = tf.keras.Sequential([
-            # Filters, Kernel Size, Strides
-            tf.keras.layers.Conv2D(256, 3, 1, activation=cfg.activ, kernel_initializer=cfg.init),
-            tf.keras.layers.BatchNormalization(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual(),
-            Residual()
-        ])
-        self.policy = Policy()
-        self.value = Value()
+        self.block = tf.keras.Sequential()
+        self.block.add(tf.keras.layers.Conv2D(256, 3, 1, activation=cfg.activ, kernel_initializer=cfg.init))
+        self.block.add(tf.keras.layers.BatchNormalization())
+        for blk in range(19):
+            self.block.add(Residual(cfg, 256))
+        self.policy = Policy(cfg)
+        self.value = Value(cfg)
     
     def call(self, x_in):
         x_in = self.block(x_in)
@@ -65,3 +47,39 @@ class AlphaGoZero(tf.keras.Model):
         x_v = self.value(x_in)
         return x_p, x_v
         
+        
+class AutoEncoder(object):
+
+    def __init__(self, cfg):
+        super(AutoEncoder, self).__init__()
+        filters = cfg.min_filters
+        self.shape = (32, 32)
+
+        self.encode = tf.keras.models.Sequential()
+        self.encode.add(tf.keras.layers.Conv2D(filters, 1, 1, activation=cfg.activ, kernel_initializer=cfg.init))
+        # Gets n from 2^n = shape
+        num_layers = int(np.log2(self.shape[0]))
+        # From shape (nxn) -> (1x1)
+        for i in range(num_layers):
+            for blk in range(cfg.num_blks):
+                self.encode.add(Residual(cfg, filters))
+            if filters != cfg.max_filters:
+                filters *= 2
+            self.encode.add(tf.keras.layers.Conv2D(filters, 3, 2, activation=cfg.activ, kernel_initializer=cfg.init))
+        
+        self.decode = tf.keras.models.Sequential()
+        # From shape (1x1) -> (nxn)
+        for i in range(num_layers):
+            self.decode.add(tf.keras.layers.Conv2DTranspose(filters, 3, 2, activation=cfg.activ, kernel_initializer=cfg.init))
+            for blk in range(cfg.num_blks):
+                self.encode.add(Residual(cfg, filters))
+            if filters != cfg.min_filters:
+                filters /= 2
+        
+        self.output = tf.keras.layers.Conv2D(cfg.num_channels, 1, 1, activation=cfg.activ, kernel_initializer=cfg.init)
+    
+    def call(self, x_in, actions):
+        encoded = self.encode(x_in)
+        encoded = tf.concat([encoded, actions], axis=-1)
+        decoded = self.decode(encoded)
+        x_out = self.output(decoded)

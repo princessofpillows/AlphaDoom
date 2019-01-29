@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from tqdm import trange
 from config import get_config
-from models import AlphaGoZero
+from models import *
 
 
 tf.enable_eager_execution()
@@ -126,7 +126,7 @@ class MCTS(object):
         return tree
 
 
-class replay(object):
+class Replay(object):
 
     def __init__(self):
         self.memory = []
@@ -160,20 +160,21 @@ class AlphaDoom(object):
         self.game.init()
 
         self.global_step = tf.train.get_or_create_global_step()
-        self.terminal = tf.zeros([84, 84, 1])
-
         # Assign mcts, memory to CPU due to GPU memory limitations
         with tf.device('CPU:0'):
             self.mcts = MCTS()
-            self.replay = replay()
+            self.autoencoder = AutoEncoder(cfg)
+            self.replay = Replay()
 
         # Load selected model
         self.model = cfg.models[cfg.model](cfg, len(cfg.actions))
-        self.model.build((None,) + self.model.shape + (cfg.num_frames,))
+        self.model.build((None,) + self.model.shape + (cfg.num_frames*cfg.num_channels,))
         self.loss1 = cfg.losses[cfg.loss1]
         self.loss2 = cfg.losses[cfg.loss2]
         self.learning_rate = cfg.lr_schedule[str(cfg.learning_rate)]
         self.optimizer = cfg.optims[cfg.optim](self.learning_rate)
+
+        self.terminal = tf.zeros([self.model.shape[0], self.model.shape[1], cfg.num_channels])
 
         self.build_writers()
 
@@ -210,10 +211,59 @@ class AlphaDoom(object):
                             self.writer.add_scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar).numpy(), self.global_step)
 
     def log_state(self, frames):
-        # Log state
         for i in range(len(frames)):
-            s = np.reshape(frames[i], [1, frames[i].shape[0], frames[i].shape[1]]).astype(np.uint8)
+            s = np.transpose(frames[i], [2,0,1]).astype(np.uint8)
             self.writer.add_image('state ' + 'n-' + str(i), s, self.global_step)
+    
+    def evaluate(self):
+        old_T = cfg.T
+        cfg.T = 0
+        p1_wins = 0
+        p2_wins = 0
+        for game in range(cfg.num_eval):
+            # Setup variables
+            self.game.new_episode()
+            frame = self.preprocess()
+            frames = []
+            # Init stack of 4 frames
+            for i in range(cfg.num_frames):
+                frames.append(frame)
+            
+            p1_frames = frames
+            p2_frames = frames
+            
+            # Alternate between players
+            while True:
+                # P1
+                curr = tf.zeros([84, 84, 1])
+                s = tf.concat(frames, axis=-1)
+                _, _, _ = self.perform_action(s)
+
+                if self.game.is_episode_finished():
+                    p1_wins += 1
+                    break
+
+                p1_frames.pop(0)
+                # TODO ******** Add support for multiple players in preprocess *********
+                p1_frames.append(self.preprocess())
+
+                # P2
+                curr = tf.ones([84, 84, 1])
+                s = tf.concat(frames, axis=-1)
+                _, _, _ = self.perform_action(s)
+
+                if self.game.is_episode_finished():
+                    p2_wins += 1
+                    break
+
+                p2_frames.pop(0)
+                p2_frames.append(self.preprocess())
+        
+        cfg.T = old_T
+        if (p1_wins / p2_wins) > 0.55 :
+            return True
+        else:
+            return False
 
     def update(self):
         # Fetch batch of experiences
@@ -240,75 +290,26 @@ class AlphaDoom(object):
             p, v = self.model(s)
             self.mcts.update(leaf, v, p_set)
 
-    def perform_action(self, s):
-        simulation(s)
-        selection, pi = self.mcts.select()
+    def perform_action(self, s0):
+        simulation(s0)
+        s1, pi = self.mcts.select()
         # One-hot action
         choice = np.zeros(len(cfg.actions))
         choice[tuple(a)] += 1
         # Take action
         reward = self.game.make_action(choice, cfg.skiprate)
         if reward > 0:
-            return selection.s, pi, 1
+            return s1, pi, 1
         else:
-            return selection.s, pi, -1
+            return s1, pi, -1
     
     def preprocess(self):
         screen = self.game.get_state().screen_buffer
         frame = np.multiply(screen, 255.0/screen.max())
-        frame = tf.image.rgb_to_grayscale(frame)
+        if cfg.colour_channels == 1:
+            frame = tf.image.rgb_to_grayscale(frame)
         frame = tf.image.resize_images(frame, self.model.shape)
         return frame
-    
-    def evaluate(self):
-        old_T = cfg.T
-        cfg.T = 0
-        p1_wins = 0
-        p2_wins = 0
-        for game in range(cfg.num_eval):
-            # Setup variables
-            self.game.new_episode()
-            frame = self.preprocess()
-            frames = []
-            # Init stack of 4 frames
-            for i in range(cfg.num_frames):
-                frames.append(frame)
-            
-            p1_frames = frames
-            p2_frames = frames
-            
-            # Alternate between players
-            while True:
-                # P1
-                curr = tf.zeros([84, 84, 1])
-                s = tf.reshape(p1_frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames, curr])
-                _, _, _ = self.perform_action(s)
-
-                if self.game.is_episode_finished():
-                    p1_wins += 1
-                    break
-
-                p1_frames.pop(0)
-                # TODO ******** Add support for multiple players in preprocess *********
-                p1_frames.append(self.preprocess())
-
-                # P2
-                curr = tf.ones([84, 84, 1])
-                s = tf.reshape(p2_frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames, curr])
-                _, _, _ = self.perform_action(s)
-
-                if self.game.is_episode_finished():
-                    p2_wins += 1
-                    break
-
-                p2_frames.pop(0)
-                p2_frames.append(self.preprocess())
-        
-        cfg.T = old_T
-        if (p1_wins / p2_wins) > 0.55 :
-            return True
-        else:
-            return False
     
     def train(self):
         self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
@@ -331,14 +332,14 @@ class AlphaDoom(object):
             # Setup variables
             self.game.new_episode()
             frame = self.preprocess()
-            self.frames = []
-            # Init stack of 4 frames
+            frames = []
+            # Init stack of n frames
             for i in range(cfg.num_frames):
-                self.frames.append(frame)
+                frames.append(frame)
             
             count = 0
             while not self.game.is_episode_finished():
-                s0 = tf.reshape(self.frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
+                s0 = tf.concat(frames, axis=-1)
                 s1, pi, z = self.perform_action(s0)
 
                 # Log frames
@@ -347,8 +348,8 @@ class AlphaDoom(object):
 
                 # Update frames with latest image
                 if self.game.get_state() is not None:
-                    self.frames.pop(0)
-                    self.frames.append(self.preprocess())
+                    frames.pop(0)
+                    frames.append(self.preprocess())
 
                 self.replay.push([s0, pi, z, s1])
                 count += 1
@@ -371,8 +372,8 @@ class AlphaDoom(object):
                 frames.append(frame)
 
             while not self.game.is_episode_finished():
-                s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], cfg.num_frames])
-                z = self.perform_action(a)
+                s0 = tf.concat(frames, axis=-1)
+                _, _, z = self.perform_action(s0)
                 
                 # Update frames with latest image
                 if self.game.get_state() is not None:

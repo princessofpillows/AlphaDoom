@@ -56,12 +56,12 @@ class Auxiliary(tf.keras.layers.Layer):
 # Residual connection block, modified s.t. batch norm is after activation
 class Residual(tf.keras.layers.Layer):
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, filters):
         super(Residual, self).__init__()
         self.layer = tf.keras.Sequential([
-            tf.keras.layers.Conv2D(256, 3, 1, activation=cfg.activ, kernel_initializer=cfg.init),
+            tf.keras.layers.Conv2D(filters, 3, 1, activation=cfg.activ, kernel_initializer=cfg.init),
             tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Conv2D(256, 3, 1, activation=cfg.activ, kernel_initializer=cfg.init),
+            tf.keras.layers.Conv2D(filters, 3, 1, activation=cfg.activ, kernel_initializer=cfg.init),
             tf.keras.layers.BatchNormalization()
         ])
 
