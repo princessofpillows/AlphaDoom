@@ -28,7 +28,7 @@ train_arg.add_argument("--learning_rate", type=float,
                        help="Learning rate (gradient step size)")
 
 train_arg.add_argument("--episodes", type=int,
-                       default=100,
+                       default=2,
                        help="Number of episodes to train on")
 
 train_arg.add_argument("--log_dir", type=str,
@@ -44,7 +44,7 @@ train_arg.add_argument("--save_dir", type=str,
                        help="Directory to save current model")
 
 train_arg.add_argument("--save_freq", type=int,
-                       default=10,
+                       default=1,
                        help="Number of episodes before saving model")
 
 train_arg.add_argument("-f", "--extension", type=str,
@@ -56,7 +56,7 @@ train_arg.add_argument("-f", "--extension", type=str,
 test_arg = add_argument_group("Testing")
 
 test_arg.add_argument("--test_episodes", type=int,
-                       default=100,
+                       default=1,
                        help="Number of episodes to test on")
 
 # ----------------------------------------

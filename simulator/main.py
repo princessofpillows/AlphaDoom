@@ -64,14 +64,9 @@ class Simulator(object):
             self.writer.add_image('state ' + 'n-' + str(i), s, self.global_step)
 
     def update(self, s):
-        logits = self.forward(s)
-
-        # Get actual next frame
-        truth = self.preprocess()
-        truth = tf.expand_dims(truth, 0)
-        
         # Construct graph
         with tf.GradientTape() as tape:
+            logits, truth = self.forward(s)
             # Compare logits with ground truth
             loss = tf.reduce_mean(tf.losses.mean_squared_error(truth, logits))
         
@@ -79,11 +74,7 @@ class Simulator(object):
         # Compute/apply gradients
         grads = tape.gradient(loss, self.model.trainable_weights)
         grads_and_vars = zip(grads, self.model.trainable_weights)
-        try:
-            self.optimizer.apply_gradients(grads_and_vars)
-        except Exception as e: 
-            print(e)
-            exit(1)
+        self.optimizer.apply_gradients(grads_and_vars)
 
         
         self.global_step.assign_add(1)
@@ -92,11 +83,20 @@ class Simulator(object):
         # Take action
         action = random.choice(cfg.actions)
         self.game.make_action(action)
-
+        
         # Approximate next frame
         action = tf.reshape(tf.constant(action, tf.float32), [1, 1, 1, len(cfg.actions)])
         logits = self.model(s[None], action)
-        return logits
+        print(logits)
+
+        # Get next frame
+        if self.game.get_state() is not None:
+            truth = self.preprocess()
+        else:
+            truth = self.terminal
+        truth = tf.expand_dims(truth, 0)
+
+        return logits, truth
 
     def preprocess(self):
         screen = self.game.get_state().screen_buffer
@@ -130,9 +130,6 @@ class Simulator(object):
                 frames.pop(0)
                 if self.game.get_state() is not None:
                     frames.append(self.preprocess())
-                else:
-                    # Reached terminal state, kill q values
-                    frames.append(self.terminal())
                 
         self.saver.save(file_prefix=self.ckpt_prefix)
 
@@ -147,14 +144,20 @@ class Simulator(object):
             for i in range(cfg.num_frames):
                 frames.append(frame)
 
+            count = 0
             while not self.game.is_episode_finished():
                 s = tf.concat(frames, axis=-1)
-                self.forward(s)
+                logits, _ = self.forward(s)
+
+                if count % cfg.num_frames == 0:
+                    self.log_state(logits)
                 
                 # Update frames with latest image
                 if self.game.get_state() is not None:
                     frames.pop(0)
                     frames.append(self.preprocess())
+                
+                count += 1
 
 def main():
     model = Simulator()
