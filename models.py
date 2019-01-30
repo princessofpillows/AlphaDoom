@@ -48,7 +48,7 @@ class AlphaGoZero(tf.keras.Model):
         return x_p, x_v
         
         
-class AutoEncoder(object):
+class AutoEncoder(tf.keras.Model):
 
     def __init__(self, cfg):
         super(AutoEncoder, self).__init__()
