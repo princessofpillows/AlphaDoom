@@ -1,8 +1,7 @@
 import vizdoom as vzd
 import tensorflow as tf
 import numpy as np
-import random, os, pickle, cv2
-from tensorboardX import SummaryWriter
+import random, os, pickle
 from datetime import datetime
 from pathlib import Path
 from tqdm import trange
@@ -58,33 +57,33 @@ class Simulator(object):
         if cfg.extension is None:
             cfg.extension = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
 
+        self.log_path = cfg.log_dir + cfg.extension
+        self.writer = tf.contrib.summary.create_file_writer(self.log_path)
+        self.writer.set_as_default()
+
         self.save_path = cfg.save_dir + cfg.extension
         self.ckpt_prefix = self.save_path + '/ckpt'
-        self.saver = tf.train.Checkpoint(model=self.model, optimizer=self.optimizer, optimizer_step=self.global_step)
+        self.saver = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model, global_step=self.global_step, best_acc=self.best_acc, epoch=self.epoch)
 
-        log_path = cfg.log_dir + cfg.extension
-        self.writer = SummaryWriter(log_path, max_queue=0)
+    def logger(self, tape, loss, logits):
+        with tf.contrib.summary.record_summaries_every_n_global_steps(cfg.log_freq, self.global_step):
+            # Log vars
+            tf.contrib.summary.scalar('loss', loss)
+            tf.contrib.summary.histogram('logits', logits)
 
-    def logger(self, tape, loss):
-        if self.global_step.numpy() % cfg.log_freq == 0:
-            # Log scalars
-            self.writer.add_scalar('loss', loss.numpy(), self.global_step)
-            
-            # Log weight scalars
+            # Log weights
             slots = self.optimizer.get_slot_names()
             for variable in tape.watched_variables():
-                    self.writer.add_scalar(variable.name, tf.nn.l2_loss(variable).numpy(), self.global_step)
-
+                    tf.contrib.summary.scalar(variable.name, tf.nn.l2_loss(variable))
                     for slot in slots:
                         slotvar = self.optimizer.get_slot(variable, slot)
                         if slotvar is not None:
-                            self.writer.add_scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar).numpy(), self.global_step)
+                            tf.contrib.summary.scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
     
-    def log_state(self, logits, count):
-        s = np.transpose(logits[0], [2,0,1]).astype(np.uint8)
-        self.writer.add_image('logits', s, count)
+    def log_state(self, logits):
+        with tf.contrib.summary.always_record_summaries():
+            tf.contrib.summary.image("logits", logits)
         
-
     def update(self, s0, action, s1):
         # Construct graph
         with tf.GradientTape() as tape:
@@ -93,13 +92,12 @@ class Simulator(object):
             # Compare logits with ground truth
             loss = tf.reduce_mean(self.loss(s1, logits))
         
-        self.logger(tape, loss)
+        self.logger(tape, loss, logits)
         # Compute/apply gradients
         grads = tape.gradient(loss, self.model.trainable_weights)
         grads_and_vars = zip(grads, self.model.trainable_weights)
         self.optimizer.apply_gradients(grads_and_vars)
-
-        self.writer.add_histogram('logits', logits.numpy(), self.global_step)
+        
         self.global_step.assign_add(1)
     
     def train(self):
@@ -135,13 +133,11 @@ class Simulator(object):
         self.saver.restore(tf.train.latest_checkpoint(self.save_path))
         batch = self.data_ts.shuffle(self.size).batch(cfg.batch_size)
         acc_total = []
-        count = 0
         for s0, action, s1 in batch:
             logits = self.model(s0, action)
-            self.log_state(logits, count)
+            self.log_state(logits)
             acc = tf.reduce_mean(tf.cast(tf.equal(logits, s1), 'float32'))
             acc_total.append(acc)
-            count += 1
         
         acc = np.sum(acc_total) / len(acc_total)
         message = 'Accuracy: ' + str(acc) + '. Number of epochs where overfitting occured: ' + str(cfg.epochs - self.epoch.numpy()) + '. Note: Model stops saving when overfitting occurs.'

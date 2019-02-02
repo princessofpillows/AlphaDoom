@@ -177,43 +177,38 @@ class AlphaDoom(object):
         self.terminal = tf.zeros([self.model.shape[0], self.model.shape[1], cfg.num_channels])
 
         self.build_writers()
-
+    
     def build_writers(self):
         if not Path(cfg.save_dir).is_dir():
             os.mkdir(cfg.save_dir)
         if cfg.extension is None:
             cfg.extension = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
 
+        self.log_path = cfg.log_dir + cfg.extension
+        self.writer = tf.contrib.summary.create_file_writer(self.log_path)
+        self.writer.set_as_default()
+
         self.save_path = cfg.save_dir + cfg.extension
         self.ckpt_prefix = self.save_path + '/ckpt'
-        self.saver = tf.train.Checkpoint(model=self.model, optimizer=self.optimizer, optimizer_step=self.global_step)
-
-        log_path = cfg.log_dir + cfg.extension
-        self.writer = SummaryWriter(log_path)
-    
+        self.saver = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model, global_step=self.global_step)
+        
     def logger(self, tape, loss):
-        if self.global_step.numpy() % cfg.log_freq == 0:
-            # Log scalars
-            self.writer.add_scalar('loss', loss.numpy(), self.global_step)
+        with tf.contrib.summary.record_summaries_every_n_global_steps(cfg.log_freq, self.global_step):
+            # Log vars
+            tf.contrib.summary.scalar('loss', loss)
 
-            # Log tree
-            tree = tensorboardX.utils.figure_to_image(visualize(), close=True)
-            self.writer.add_image('mcts', tree, self.global_step)
-            
-            # Log weight scalars
+            # Log weights
             slots = self.optimizer.get_slot_names()
             for variable in tape.watched_variables():
-                    self.writer.add_scalar(variable.name, tf.nn.l2_loss(variable).numpy(), self.global_step)
-
+                    tf.contrib.summary.scalar(variable.name, tf.nn.l2_loss(variable))
                     for slot in slots:
                         slotvar = self.optimizer.get_slot(variable, slot)
                         if slotvar is not None:
-                            self.writer.add_scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar).numpy(), self.global_step)
-
-    def log_state(self, frames):
-        for i in range(len(frames)):
-            s = np.transpose(frames[i], [2,0,1]).astype(np.uint8)
-            self.writer.add_image('state ' + 'n-' + str(i), s, self.global_step)
+                            tf.contrib.summary.scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
+    
+    def log_state(self, logits):
+        with tf.contrib.summary.always_record_summaries():
+            tf.contrib.summary.image("logits", logits)
     
     def evaluate(self):
         old_T = cfg.T
