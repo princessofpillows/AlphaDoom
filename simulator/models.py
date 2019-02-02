@@ -8,7 +8,7 @@ class AutoEncoder(tf.keras.Model):
     def __init__(self, cfg):
         super(AutoEncoder, self).__init__()
         filters = cfg.min_filters
-        self.shape = (32, 32)
+        self.shape = cfg.resolutions["autoencoder"]
 
         self.encode = tf.keras.models.Sequential()
         self.encode.add(tf.keras.layers.Conv2D(filters, 1, 1, padding="same", activation=cfg.activ, kernel_initializer=cfg.init))
@@ -34,7 +34,7 @@ class AutoEncoder(tf.keras.Model):
             if i < num_layers - 1:
                 self.decode.add(tf.keras.layers.Conv2DTranspose(filters, 3, 2, padding="same", activation=cfg.activ, kernel_initializer=cfg.init))
         
-        self.decode.add(tf.keras.layers.Conv2D(cfg.num_channels, 1, 1, padding="same", activation=cfg.activ, kernel_initializer=cfg.init))
+        self.decode.add(tf.keras.layers.Conv2D(cfg.output_channels, 1, 1, padding="same", activation=tf.nn.tanh, kernel_initializer=cfg.init))
     
     def call(self, x_in, actions):
         encoded = self.encode(x_in)

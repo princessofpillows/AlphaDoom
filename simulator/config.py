@@ -1,6 +1,7 @@
 
 import argparse
 import tensorflow as tf
+from models import AutoEncoder
 
 # ----------------------------------------
 # Global variables
@@ -20,16 +21,36 @@ def add_argument_group(name):
     return arg
 
 # ----------------------------------------
+# Arguments for preprocessing
+pre_arg = add_argument_group("Preprocessing")
+
+pre_arg.add_argument("--data_dir", type=str,
+                       default="data.pkl",
+                       help="Location of image data")
+
+pre_arg.add_argument("--package_data", type=bool,
+                       default=True,
+                       help="Whether or not to regather frames from package_data.py")
+
+# ----------------------------------------
 # Arguments for training
 train_arg = add_argument_group("Training")
 
 train_arg.add_argument("--learning_rate", type=float,
-                       default=1e-2,
+                       default=1e-4,
                        help="Learning rate (gradient step size)")
 
-train_arg.add_argument("--episodes", type=int,
-                       default=2,
-                       help="Number of episodes to train on")
+train_arg.add_argument("--batch_size", type=int,
+                       default=32,
+                       help="Number of images in each forward pass")
+
+train_arg.add_argument("--epochs", type=int,
+                       default=1,
+                       help="Number of epochs to train on")
+
+train_arg.add_argument("--val_freq", type=int,
+                       default=10,
+                       help="Validation interval in epochs")
 
 train_arg.add_argument("--log_dir", type=str,
                        default="./logs/",
@@ -52,28 +73,21 @@ train_arg.add_argument("-f", "--extension", type=str,
                        help="Specific name to save training session or restore from")
 
 # ----------------------------------------
-# Arguments for testing
-test_arg = add_argument_group("Testing")
-
-test_arg.add_argument("--test_episodes", type=int,
-                       default=1,
-                       help="Number of episodes to test on")
-
-# ----------------------------------------
 # Arguments for model
 model_arg = add_argument_group("Model")
 
-train_arg.add_argument("--num_blks",
-                       default=5,
-                       help="Residual blocks in Autoencoder")
+model_arg.add_argument("--model", type=str,
+                       default="autoencoder",
+                       choices=["autoencoder"],
+                       help="Chosen architecture")
 
-train_arg.add_argument("--min_filters",
-                       default=16,
-                       help="Minimum number of filters in network")
+model_arg.add_argument("--models",
+                       default={"autoencoder":AutoEncoder},
+                       help="Architecture options")
 
-train_arg.add_argument("--max_filters",
-                       default=128,
-                       help="Maximum number of filters in network")
+model_arg.add_argument("--resolutions",
+                       default={"autoencoder":(32,32)},
+                       help="Resolution for chosen architecture")
 
 model_arg.add_argument("--activ", type=str,
                        default="relu",
@@ -84,6 +98,24 @@ model_arg.add_argument("--init", type=str,
                        default="glorot_normal",
                        choices=["glorot_normal", "glorot_uniform", "random_normal", "random_uniform", "truncated_normal"],
                        help="Initialization function to use")
+
+model_arg.add_argument("--optim", type=str,
+                       default="adam",
+                       choices=["adam"],
+                       help="Chosen optimizer")
+
+model_arg.add_argument("--optims",
+                       default={"adam":tf.train.AdamOptimizer},
+                       help="Optimizer options")
+
+model_arg.add_argument("--loss", type=str,
+                       default="mse",
+                       choices=["mse"],
+                       help="Chosen loss")
+
+model_arg.add_argument("--losses",
+                       default={"mse":tf.losses.mean_squared_error},
+                       help="Loss options")
 
 model_arg.add_argument("--actions", type=int,
                        default=[shoot, left, right],
@@ -99,7 +131,23 @@ model_arg.add_argument("--num_frames", type=int,
 
 model_arg.add_argument("--num_channels", type=int,
                        default=3,
-                       help="Number of colour channels in frame [1, 3]")                   
+                       help="Number of colour channels in frame [1, 3]")
+
+model_arg.add_argument("--output_channels", type=int,
+                       default=3,
+                       help="Size of last dimension of autoencoder")
+
+train_arg.add_argument("--num_blks",
+                       default=1,
+                       help="Residual blocks in autoencoder")
+
+train_arg.add_argument("--min_filters",
+                       default=16,
+                       help="Minimum number of filters in network")
+
+train_arg.add_argument("--max_filters",
+                       default=128,
+                       help="Maximum number of filters in network")         
 
 # ----------------------------------------
 # Function to be called externally
