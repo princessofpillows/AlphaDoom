@@ -1,7 +1,7 @@
 import vizdoom as vzd
 import tensorflow as tf
 import numpy as np
-import random, os, pickle
+import random, os, pickle, cv2
 from datetime import datetime
 from pathlib import Path
 from tqdm import trange
@@ -65,34 +65,49 @@ class Simulator(object):
         self.ckpt_prefix = self.save_path + '/ckpt'
         self.saver = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model, global_step=self.global_step, best_acc=self.best_acc, epoch=self.epoch)
 
-    def logger(self, tape, loss, logits):
-        with tf.contrib.summary.record_summaries_every_n_global_steps(cfg.log_freq, self.global_step):
-            # Log vars
-            tf.contrib.summary.scalar('loss', loss)
-            tf.contrib.summary.histogram('logits', logits)
+    def logger(self, tape, loss, logits, s0, s1):
+        if self.global_step.numpy() % cfg.log_freq == 0:
+            with tf.contrib.summary.always_record_summaries():
+                # Log vars
+                tf.contrib.summary.scalar('loss', loss)
+                
+                if self.global_step.numpy() % (cfg.log_freq * 100) == 0:
+                    tf.contrib.summary.histogram('logits', logits)
+                    tf.contrib.summary.histogram('s0', s0)
+                    tf.contrib.summary.histogram('s1', s1)
 
-            # Log weights
-            slots = self.optimizer.get_slot_names()
-            for variable in tape.watched_variables():
-                    tf.contrib.summary.scalar(variable.name, tf.nn.l2_loss(variable))
-                    for slot in slots:
-                        slotvar = self.optimizer.get_slot(variable, slot)
-                        if slotvar is not None:
-                            tf.contrib.summary.scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
+                    # Log weights
+                    slots = self.optimizer.get_slot_names()
+                    for variable in tape.watched_variables():
+                            tf.contrib.summary.histogram(variable.name, variable)
+                            for slot in slots:
+                                slotvar = self.optimizer.get_slot(variable, slot)
+                                if slotvar is not None:
+                                    tf.contrib.summary.histogram(variable.name + '/' + slot, slotvar)
     
-    def log_state(self, logits):
-        with tf.contrib.summary.always_record_summaries():
-            tf.contrib.summary.image("logits", logits)
-        
+    def log_state(self, state, name):
+        if self.global_step.numpy() % (cfg.log_freq * 10) == 0:
+            with tf.contrib.summary.always_record_summaries():
+                state = tf.cast(state, tf.float32)
+                tf.contrib.summary.image(name, state, max_images=3)
+
     def update(self, s0, action, s1):
+        # Normalize
+        s0_n = tf.image.per_image_standardization(s0)
+        truth = tf.image.per_image_standardization(s1) - s0_n
         # Construct graph
         with tf.GradientTape() as tape:
             # Approximate next frame
-            logits = self.model(s0, action)
-            # Compare logits with ground truth
-            loss = tf.reduce_mean(self.loss(s1, logits))
+            logits = self.model(s0_n, action)
+            # Compare generated transformation matrix with truth
+            loss = tf.reduce_mean(self.loss(truth, logits))
         
-        self.logger(tape, loss, logits)
+        self.logger(tape, loss, logits, s0, s1)
+        self.log_state(s0, "s0")
+        self.log_state(logits, "logits")
+        self.log_state(logits + s0_n, "logits_s0")
+        self.log_state(s1, "truth")
+        self.log_state(truth, "truth_logits")
         # Compute/apply gradients
         grads = tape.gradient(loss, self.model.trainable_weights)
         grads_and_vars = zip(grads, self.model.trainable_weights)
@@ -110,48 +125,17 @@ class Simulator(object):
             for s0, action, s1 in batch:
                 self.update(s0, action, s1)
             self.epoch.assign_add(1)
-            # Perform validation
-            if epoch % cfg.val_freq == 0:
-                batch = self.data_va.shuffle(self.size).batch(cfg.batch_size)
-                acc_total = []
-                for s0, action, s1 in batch:
-                    logits = self.model(s0, action)
-                    acc = tf.reduce_mean(tf.cast(tf.equal(logits, s1), 'float32'))
-                    acc_total.append(acc)
-
-                self.val_acc = np.sum(acc_total) / len(acc_total)
-                if self.best_acc < self.val_acc:
-                    self.best_acc.assign(self.val_acc)
-                    self.saver.save(file_prefix=self.ckpt_prefix)
-                else:
-                    cfg.val_freq //= 2
-                    if cfg.val_freq == 0:
-                        print("Stopping training early at epoch " + str(epoch) + " due to overfitting.")
-                        return
-
-    def test(self):
-        self.saver.restore(tf.train.latest_checkpoint(self.save_path))
-        batch = self.data_ts.shuffle(self.size).batch(cfg.batch_size)
-        acc_total = []
-        for s0, action, s1 in batch:
-            logits = self.model(s0, action)
-            self.log_state(logits)
-            acc = tf.reduce_mean(tf.cast(tf.equal(logits, s1), 'float32'))
-            acc_total.append(acc)
-        
-        acc = np.sum(acc_total) / len(acc_total)
-        message = 'Accuracy: ' + str(acc) + '. Number of epochs where overfitting occured: ' + str(cfg.epochs - self.epoch.numpy()) + '. Note: Model stops saving when overfitting occurs.'
-        print(message)
+        self.saver.save(file_prefix=self.ckpt_prefix)
 
     def predict(self, s0, action):
         self.saver.restore(tf.train.latest_checkpoint(self.save_path))
-        logits = self.model(s0, action)
-        return logits
+        s0_n = tf.image.per_image_standardization(s0)
+        logits = self.model(s0_n, action)
+        return logits + s0_n
 
 def main():
     model = Simulator()
     model.train()
-    model.test()
 
 if __name__ == "__main__":
     main()

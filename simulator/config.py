@@ -29,7 +29,7 @@ pre_arg.add_argument("--data_dir", type=str,
                        help="Location of image data")
 
 pre_arg.add_argument("--package_data", type=bool,
-                       default=True,
+                       default=False,
                        help="Whether or not to regather frames from package_data.py")
 
 # ----------------------------------------
@@ -37,15 +37,15 @@ pre_arg.add_argument("--package_data", type=bool,
 train_arg = add_argument_group("Training")
 
 train_arg.add_argument("--learning_rate", type=float,
-                       default=1e-4,
+                       default=1e-3,
                        help="Learning rate (gradient step size)")
 
 train_arg.add_argument("--batch_size", type=int,
-                       default=32,
+                       default=100,
                        help="Number of images in each forward pass")
 
 train_arg.add_argument("--epochs", type=int,
-                       default=1,
+                       default=500,
                        help="Number of epochs to train on")
 
 train_arg.add_argument("--val_freq", type=int,
@@ -122,7 +122,7 @@ model_arg.add_argument("--actions", type=int,
                        help="Possible actions to take")
 
 model_arg.add_argument("--skiprate", type=int,
-                       default=3,
+                       default=10,
                        help="Number of frames to skip during each action. Current action will be repeated for duration of skip")
 
 model_arg.add_argument("--num_frames", type=int,
@@ -130,12 +130,12 @@ model_arg.add_argument("--num_frames", type=int,
                        help="Number of stacked frames to send to CNN, depicting motion")
 
 model_arg.add_argument("--num_channels", type=int,
-                       default=3,
+                       default=1,
                        help="Number of colour channels in frame [1, 3]")
 
 model_arg.add_argument("--output_channels", type=int,
-                       default=3,
-                       help="Size of last dimension of autoencoder")
+                       default=1,
+                       help="Size of last dimension of autoencoder. Same as num_channels?")
 
 train_arg.add_argument("--num_blks",
                        default=1,

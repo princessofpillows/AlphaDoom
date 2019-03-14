@@ -163,7 +163,7 @@ class AlphaDoom(object):
         # Assign mcts, memory to CPU due to GPU memory limitations
         with tf.device('CPU:0'):
             self.mcts = MCTS()
-            self.autoencoder = AutoEncoder(cfg)
+            self.simulator = AutoEncoder(cfg)
             self.replay = Replay()
 
         # Load selected model

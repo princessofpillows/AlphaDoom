@@ -135,7 +135,7 @@ model_arg.add_argument("--models",
                        help="Architecture options")
 
 model_arg.add_argument("--resolutions",
-                       default={"atari":(84,84), "alphagozero":(16,16)},
+                       default={"atari":(84,84), "alphagozero":(32,32), "autoencoder":(32,32)},
                        help="Resolution for chosen architecture")
 
 model_arg.add_argument("--activ", type=str,
