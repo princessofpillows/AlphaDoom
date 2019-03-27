@@ -59,9 +59,9 @@ class Residual(tf.keras.layers.Layer):
     def __init__(self, cfg, filters):
         super(Residual, self).__init__()
         self.layer = tf.keras.Sequential([
-            tf.keras.layers.Conv2D(filters, 3, 1, activation=cfg.activ, kernel_initializer=cfg.init),
+            tf.keras.layers.Conv2D(filters, 3, 1, padding="same", activation=cfg.activ, kernel_initializer=cfg.init),
             tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Conv2D(filters, 3, 1, activation=cfg.activ, kernel_initializer=cfg.init),
+            tf.keras.layers.Conv2D(filters, 3, 1, padding="same", activation=cfg.activ, kernel_initializer=cfg.init),
             tf.keras.layers.BatchNormalization()
         ])
 

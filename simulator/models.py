@@ -38,6 +38,8 @@ class AutoEncoder(tf.keras.Model):
     
     def call(self, x_in, actions):
         encoded = self.encode(x_in)
+        print(encoded.shape)
+        print(actions.shape)
         encoded = tf.concat([encoded, actions], axis=-1)
         x_out = self.decode(encoded)
         return x_out

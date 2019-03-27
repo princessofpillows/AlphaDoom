@@ -2,14 +2,14 @@ import vizdoom as vzd
 import tensorflow as tf
 import numpy as np
 import networkx as nx
-import matplotlib.pyplot as plt
-import random, os
-from tensorboardX import SummaryWriter
+import random, os, cv2, pickle
 from datetime import datetime
 from pathlib import Path
 from tqdm import trange
 from config import get_config
-from models import *
+from models import Simulator
+from sklearn.cluster import KMeans
+from skimage.color import rgb2hsv, hsv2rgb
 
 
 tf.enable_eager_execution()
@@ -18,11 +18,12 @@ cfg = get_config()
 class MCTS(object):
 
     class Node(object):
-        # p is prior probability of selecting, n is number of visits, q is mean value, w is total value
-        def __init__(self, parent=None, s=None, p=0):
+        # s is state, a is action on edge, p is prior probability of selecting, n is number of visits, q is mean value, w is total value
+        def __init__(self, parent=None, s=None, a=None, p=0):
             self.parent = parent
             self.children = []
             self.s = s
+            self.a = a
             self.p = p
             self.n = 0
             self.w = 0
@@ -35,7 +36,8 @@ class MCTS(object):
         def update(self, v):
             self.w = self.w + v
             self.q = self.w / self.n
-            
+        
+        # Add visit to node
         def increment(self):
             self.n += 1
         
@@ -47,56 +49,66 @@ class MCTS(object):
         self.root = MCTS.Node()
         self.curr_root = self.root
 
+    # Selects best path from current state
     def select(self, parent):
         v = []
+        # Gets value for each child of parent (N children == N actions)
         for child in parent.children:
             v.append(child.value())
 
         v = np.asarray(v)
-        v_max = np.where(v == np.max(v))
+        # Gets index of best child node
+        v_max = np.where(v == np.max(v))[0]
+        idx = v_max[0]
+        # Random select if tie
         if len(v_max) > 1:
-            return np.random.choice(v_max)
-        return v_max[0]
+            idx = np.random.choice(v_max)
+
+        return parent.children[idx]
     
+    # Add edge and empty child node to parent node
     def expand(self, parent, p):
-        child = MCTS.Node(parent, None, p)
+        child = MCTS.Node(parent, None, None, p)
         parent.add_child(child)
     
+    # Finds leaf from best current path
     def search(self):
-        # Find leaf
         curr = self.curr_root
         while(curr.children != []):
-            curr = select(curr)
+            curr = self.select(curr)
         
         return curr
     
-    def update(self, leaf, s, v, p_set):
-        # Expand node and evaluate
-        for p in p_set:
+    # Add new edges to tree, backprop through current path
+    def update(self, leaf, v, p_set):
+        # Adds edge and empty node for each action
+        noise = np.random.dirichlet(cfg.d_noise * np.ones(len(cfg.actions)))
+        p_set = p_set.numpy()[0]
+        for i in range(len(cfg.actions)):
             # Add dirichlet noise
-            p = (1 - cfg.eps) * p + cfg.eps * np.random.dirichlet(cfg.d_noise)
-            expand(leaf, p)
+            p = (1 - cfg.eps) * p_set[i] + cfg.eps * noise[i]
+            self.expand(leaf, p)
 
         # Backpropogation
         curr = leaf
         while curr.parent != None:
             curr.increment()
-            curr.update(v)
+            curr.update(v.numpy()[0])
             curr = curr.parent
-        
-    def select(self):
-        # Play
-        best_s = 0
+    
+    # From current root node, iterate through children and select one based on exploration heuristic and vist count
+    def select_action(self):
+        best = 0
         selection = None
-        # When T is 0, becomes deterministic instead of stochastic
+        # Exploration based expansion; when T is 0, becomes deterministic instead of stochastic
         for child in self.curr_root.children:
-            s = np.pow(child.n, 1 / cfg.T) / np.pow(self.root.n, 1 / cfg.T)
-            if s > best_s:
-                best_s = s
+            curr = np.power(child.n, 1 / cfg.T) / np.power(self.root.n, 1 / cfg.T)
+            if curr > best:
+                best = curr
                 selection = child
-
+ 
         self.curr_root = selection
-        return selection, np.pow(selection.n, 1 / cfg.T)
+        return selection.a, np.power(selection.n, 1 / cfg.T)
     
     def visualize_tree(self):
 
@@ -156,26 +168,64 @@ class AlphaDoom(object):
 
         # Create game instance
         self.game = vzd.DoomGame()
-        self.game.load_config('vizdoom/scenarios/basic.cfg')
+        # Scenario
+        self.game.set_doom_scenario_path("./vizdoom/scenarios/basic.wad")
+        self.game.set_doom_map("map01")
+        # Screen
+        self.game.set_screen_resolution(vzd.ScreenResolution.RES_640X480)
+        self.game.set_screen_format(vzd.ScreenFormat.RGB24)
+        self.game.set_window_visible(True)
+        #self.game.set_sound_enabled(True)
+        # Buffers
+        #self.game.set_depth_buffer_enabled(True)
+        #self.game.set_labels_buffer_enabled(True)
+        #self.game.set_automap_buffer_enabled(True)
+        # Rendering
+        self.game.set_render_hud(False)
+        self.game.set_render_minimal_hud(False) # If HUD enabled
+        self.game.set_render_crosshair(False)
+        self.game.set_render_weapon(False)
+        self.game.set_render_decals(False)  # Bullet holes and blood on the walls
+        self.game.set_render_particles(False)
+        self.game.set_render_effects_sprites(False)  # Smoke and blood
+        self.game.set_render_messages(False)  # In-game messages
+        self.game.set_render_corpses(False)
+        self.game.set_render_screen_flashes(True) # Effect upon taking damage or picking up items
+        # Actions
+        self.game.set_available_buttons([vzd.Button.MOVE_LEFT, vzd.Button.MOVE_RIGHT, vzd.Button.ATTACK])
+        # Variables included in state
+        self.game.set_available_game_variables([vzd.GameVariable.AMMO2])
+        # Start/end time
+        self.game.set_episode_start_time(14)
+        self.game.set_episode_timeout(300)
+        # Reward
+        self.game.set_living_reward(-1)
+        self.game.set_doom_skill(5)
+        # Game mode
+        self.game.set_mode(vzd.Mode.PLAYER)
         self.game.init()
 
         self.global_step = tf.train.get_or_create_global_step()
-        # Assign mcts, memory to CPU due to GPU memory limitations
+        # Assign mcts, replay to CPU due to GPU memory limitations
         with tf.device('CPU:0'):
             self.mcts = MCTS()
-            self.simulator = AutoEncoder(cfg)
             self.replay = Replay()
 
+        # Init next state simulator
+        self.simulator = Simulator(cfg)
+        self.sim_saver = tf.train.Checkpoint(model=self.simulator)
+        self.sim_saver.restore(tf.train.latest_checkpoint("./simulator/saves/best"))
+
         # Load selected model
-        self.model = cfg.models[cfg.model](cfg, len(cfg.actions))
-        self.model.build((None,) + self.model.shape + (cfg.num_frames*cfg.num_channels,))
+        self.model = cfg.models[cfg.model](cfg)
+        #self.model.build((None,) + self.model.shape + (cfg.num_frames*cfg.num_channels,))
         self.loss1 = cfg.losses[cfg.loss1]
         self.loss2 = cfg.losses[cfg.loss2]
         self.learning_rate = cfg.lr_schedule[str(cfg.learning_rate)]
         self.optimizer = cfg.optims[cfg.optim](self.learning_rate)
 
+        self.resolution = (cfg.resolutions[cfg.model])
         self.terminal = tf.zeros([self.model.shape[0], self.model.shape[1], cfg.num_channels])
-
         self.build_writers()
     
     def build_writers(self):
@@ -193,22 +243,26 @@ class AlphaDoom(object):
         self.saver = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model, global_step=self.global_step)
         
     def logger(self, tape, loss):
-        with tf.contrib.summary.record_summaries_every_n_global_steps(cfg.log_freq, self.global_step):
-            # Log vars
-            tf.contrib.summary.scalar('loss', loss)
-
-            # Log weights
-            slots = self.optimizer.get_slot_names()
-            for variable in tape.watched_variables():
-                    tf.contrib.summary.scalar(variable.name, tf.nn.l2_loss(variable))
-                    for slot in slots:
-                        slotvar = self.optimizer.get_slot(variable, slot)
-                        if slotvar is not None:
-                            tf.contrib.summary.scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
+        if self.global_step.numpy() % cfg.log_freq == 0:
+            with tf.contrib.summary.always_record_summaries():
+                # Log vars
+                tf.contrib.summary.scalar('loss', loss)
+                
+                if self.global_step.numpy() % (cfg.log_freq * 100) == 0:
+                    # Log weights
+                    slots = self.optimizer.get_slot_names()
+                    for variable in tape.watched_variables():
+                            tf.contrib.summary.histogram(variable.name, variable)
+                            for slot in slots:
+                                slotvar = self.optimizer.get_slot(variable, slot)
+                                if slotvar is not None:
+                                    tf.contrib.summary.histogram(variable.name + '/' + slot, slotvar)
     
-    def log_state(self, logits):
-        with tf.contrib.summary.always_record_summaries():
-            tf.contrib.summary.image("logits", logits)
+    def log_state(self, state, name):
+        if self.global_step.numpy() % (cfg.log_freq * 100) == 0:
+            with tf.contrib.summary.always_record_summaries():
+                state = tf.cast(state, tf.float32)
+                tf.contrib.summary.image(name, state, max_images=3)
     
     def evaluate(self):
         old_T = cfg.T
@@ -277,39 +331,53 @@ class AlphaDoom(object):
 
         self.global_step.assign_add(1)
     
-    def simulation(self, s):
+    # Runs N simulations, where each sim reaches a leaf node in MCTS tree
+    def simulate(self, s0):
         for i in range(cfg.num_sims):
+            # Find leaf
             leaf = self.mcts.search()
-            # TODO ********* need some way of acquiring s for a simulated sequence of actions *********
-            leaf.s = s
-            p, v = self.model(s)
-            self.mcts.update(leaf, v, p_set)
+            leaf.a = random.choice(cfg.actions)
+            # Simulate leaf's state
+            leaf.s = self.simulator.predict(s0, np.reshape(leaf.a, [1, 1, len(cfg.actions)]).astype(np.float32))
+            # Get p, the prior probability set of all actions (edges) from current leaf node, and v, the value of current leaf node
+            p, v = self.model(leaf.s)
+            # Backprop through MCTS tree
+            self.mcts.update(leaf, v, p)
 
+    # Returns best action
     def perform_action(self, s0):
-        simulation(s0)
-        s1, pi = self.mcts.select()
-        # One-hot action
-        choice = np.zeros(len(cfg.actions))
-        choice[tuple(a)] += 1
+        self.simulate(s0)
+        action, pi = self.mcts.select_action()
         # Take action
-        reward = self.game.make_action(choice, cfg.skiprate)
+        reward = self.game.make_action(action, cfg.skiprate)
+        # Reward of -1 if bad, +1 if good
         if reward > 0:
-            return s1, pi, 1
+            return pi, 1
         else:
-            return s1, pi, -1
+            return pi, -1
     
     def preprocess(self):
-        screen = self.game.get_state().screen_buffer
-        frame = np.multiply(screen, 255.0/screen.max())
-        if cfg.colour_channels == 1:
-            frame = tf.image.rgb_to_grayscale(frame)
-        frame = tf.image.resize_images(frame, self.model.shape)
+        frame = self.game.get_state().screen_buffer
+        # Blur, crop, resize
+        frame = cv2.GaussianBlur(frame, (39,39), 0, 0)
+        frame = tf.image.central_crop(frame, 0.5)
+        frame = tf.image.resize(frame, self.resolution, align_corners=True, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR).numpy()
+        # Kmeans clustering
+        frame = rgb2hsv(frame)
+        kmeans = KMeans(n_clusters=4).fit(frame.reshape((-1, 3)))
+        frame = kmeans.cluster_centers_[kmeans.labels_].reshape(frame.shape)
+        frame = hsv2rgb(frame)
+        # Greyscale
+        if cfg.num_channels == 1:
+            frame = tf.image.rgb_to_grayscale(frame).numpy()
         return frame
     
     def train(self):
-        self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
-        with open(self.save_path + 'replay.pkl', 'rb') as f:
-            self.replay.memory = pickle.load(f)
+        if Path(self.save_path).is_dir():
+            self.saver.restore(tf.train.latest_checkpoint(self.save_path))
+        if Path(self.save_path + '/replay.pkl').is_file():
+            with open(self.save_path + '/replay.pkl', 'rb') as f:
+                self.replay.memory = pickle.load(f)
         for episode in trange(cfg.episodes):
             # Update learning rate at scheduled times
             if episode % cfg.lr_schedule[str(cfg.learning_rate)][1] == 0:
@@ -319,10 +387,10 @@ class AlphaDoom(object):
             # Save model
             if episode % cfg.save_freq == 0:
                 # Check if new model is improvement over current best
-                if self.evaluate():
-                    self.saver.save(file_prefix=self.ckpt_prefix)
-                    with open(self.save_path + 'replay.pkl', 'wb') as f:
-                        pickle.dump(self.replay.memory, f)
+                #if self.evaluate():
+                self.saver.save(file_prefix=self.ckpt_prefix)
+                with open(self.save_path + 'replay.pkl', 'wb') as f:
+                    pickle.dump(self.replay.memory, f)
 
             # Setup variables
             self.game.new_episode()
@@ -332,54 +400,26 @@ class AlphaDoom(object):
             for i in range(cfg.num_frames):
                 frames.append(frame)
             
-            count = 0
             while not self.game.is_episode_finished():
                 s0 = tf.concat(frames, axis=-1)
-                s1, pi, z = self.perform_action(s0)
-
-                # Log frames
-                if count % self.cfg.num_frames == 0:
-                    self.log_state(frames)
+                pi, z = self.perform_action(s0)
 
                 # Update frames with latest image
                 if self.game.get_state() is not None:
                     frames.pop(0)
                     frames.append(self.preprocess())
 
+                s1 = tf.concat(frames, axis=-1)
                 self.replay.push([s0, pi, z, s1])
-                count += 1
                 
             # Train on experiences from memory
             self.update()
         
         self.saver.save(file_prefix=self.ckpt_prefix)
 
-    def test(self):
-        rewards = []
-        self.saver.restore(tf.train.latest_checkpoint(cfg.save_dir))
-        for _ in trange(cfg.test_episodes):
-            # Setup variables
-            self.game.new_episode()
-            frame = self.preprocess()
-            frames = []
-            # Init stack of 4 frames
-            for i in cfg.num_frames:
-                frames.append(frame)
-
-            while not self.game.is_episode_finished():
-                s0 = tf.concat(frames, axis=-1)
-                _, _, z = self.perform_action(s0)
-                
-                # Update frames with latest image
-                if self.game.get_state() is not None:
-                    frames.pop(0)
-                    frames.append(self.preprocess())
-
-            rewards.append(self.game.get_total_reward())
-        print("Average Reward: ", sum(rewards)/cfg.test_episodes)
-
 def main():
     model = AlphaDoom()
+    model.train()
 
 if __name__ == "__main__":
     main()

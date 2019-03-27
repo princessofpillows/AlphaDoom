@@ -62,7 +62,7 @@ class Gatherer(object):
         frame = self.game.get_state().screen_buffer
         # Blur, crop, resize
         frame = cv2.GaussianBlur(frame, (39,39), 0, 0)
-        frame = tf.image.central_crop(frame, 0.5).numpy()
+        frame = tf.image.central_crop(frame, 0.5)
         frame = tf.image.resize(frame, self.resolution, align_corners=True, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR).numpy()
         # Kmeans clustering
         frame = rgb2hsv(frame)
