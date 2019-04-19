@@ -2,6 +2,11 @@ vizdoom/
 *.ini
 __pycache__/
 *.pyc
-logs/
-saves/
+alphadoom_logs/
+alphadoom_saves/
+simulator_logs/
+simulator_saves/
 *.pkl
+env/
+.vscode/
+test.py

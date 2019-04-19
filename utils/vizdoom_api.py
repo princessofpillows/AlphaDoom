@@ -1,25 +1,27 @@
 import vizdoom as vzd
 import tensorflow as tf
 import numpy as np
-import random, pickle, cv2
 import matplotlib.pyplot as plt
-from tqdm import trange
-from config import get_config
+import cv2
 from sklearn.cluster import KMeans
 from skimage.color import rgb2hsv, hsv2rgb
 
 
-tf.enable_eager_execution()
-cfg = get_config()
+class VizDoom(object):
 
-class Gatherer(object):
+    def __init__(self, cfg):
+        super(VizDoom, self).__init__()
+        
+        # Global vars
+        self.skiprate = cfg.skiprate
+        self.num_channels = cfg.num_channels
+        self.resolution = cfg.resolution
+        self.terminal = np.zeros([self.resolution[0], self.resolution[1], cfg.num_channels])
 
-    def __init__(self):
-        super(Gatherer, self).__init__()
-
+        # Init game, set params
         self.game = vzd.DoomGame()
         # Scenario
-        self.game.set_doom_scenario_path("./vizdoom/scenarios/basic.wad")
+        self.game.set_doom_scenario_path(cfg.vizdoom_dir + "/scenarios/basic.wad")
         self.game.set_doom_map("map01")
         # Screen
         self.game.set_screen_resolution(vzd.ScreenResolution.RES_640X480)
@@ -55,11 +57,25 @@ class Gatherer(object):
         self.game.set_mode(vzd.Mode.PLAYER)
         self.game.init()
 
-        self.resolution = (cfg.resolutions[cfg.model])
-        self.terminal = np.zeros([self.resolution[0], self.resolution[1], cfg.num_channels])
-
-    def preprocess(self):
-        frame = self.game.get_state().screen_buffer
+    def new_episode(self):
+        self.game.new_episode()
+    
+    def is_episode_finished(self):
+        return self.game.is_episode_finished()
+    
+    def make_action(self, action):
+        return self.game.make_action(action, self.skiprate)
+    
+    def get_state(self):
+        state = None
+        if self.game.get_state() is not None:
+            state = self.game.get_state().screen_buffer
+        return state
+    
+    def get_preprocessed_state(self):
+        frame = self.get_state()
+        if frame is None:
+            return self.terminal
         # Blur, crop, resize
         frame = cv2.GaussianBlur(frame, (39,39), 0, 0)
         frame = tf.image.central_crop(frame, 0.5)
@@ -68,50 +84,11 @@ class Gatherer(object):
         frame = rgb2hsv(frame)
         kmeans = KMeans(n_clusters=4).fit(frame.reshape((-1, 3)))
         frame = kmeans.cluster_centers_[kmeans.labels_].reshape(frame.shape)
-        frame = hsv2rgb(frame)
+        frame = hsv2rgb(frame).astype(np.float32)
         # Greyscale
-        if cfg.num_channels == 1:
+        if self.num_channels == 1:
             frame = tf.image.rgb_to_grayscale(frame).numpy()
             #plt.imshow(frame.reshape((frame.shape[0], frame.shape[1])), cmap="gray")
             #plt.show()
         return frame
     
-    def run(self):
-        memory = []
-        for episode in trange(20):
-            # Setup variables
-            self.game.new_episode()
-            frame = self.preprocess()
-            frames = []
-            # Init stack of n frames
-            for i in range(cfg.num_frames):
-                frames.append(frame)
-
-            while not self.game.is_episode_finished():
-                #s0 = tf.concat(frames, axis=-1)
-                s0 = frames[-1]
-                action = random.choice(cfg.actions)
-                self.game.make_action(action, cfg.skiprate)
-
-                # Update frames with latest image
-                frames.pop(0)
-                if self.game.get_state() is not None:
-                    frames.append(self.preprocess())
-                else:
-                    frames.append(self.terminal)
-
-                action = np.reshape(action, [1, 1, len(cfg.actions)]).astype(np.float32)
-                #s1 = tf.concat(frames, axis=-1)
-                s1 = frames[-1]
-
-                memory.append([s0, action, s1])
-
-        with open('data.pkl', 'wb') as f:
-            pickle.dump(memory, f)
-
-def main():
-    gatherer = Gatherer()
-    gatherer.run()
-
-if __name__ == "__main__":
-    main()
