@@ -20,45 +20,35 @@ class Simulator(object):
     def __init__(self):
         super(Simulator, self).__init__()
         
-        self.epoch = tf.Variable(0)
-        self.writer = Writer(cfg)
-        
         self.model = cfg.model(cfg)
         self.optim = cfg.optim(cfg.learning_rate)
         self.loss = cfg.loss
+        self.epoch = tf.Variable(0)
 
+        self.writer = Writer(cfg)
         # Restore if save exists
-        self.model, self.optim, self.epoch = self.writer.restore(self.model, self.optim, self.epoch)
+        if Path('./simulator_saves/best').is_dir():
+            self.model, self.optim, self.epoch = self.writer.restore(model=self.model, optim=self.optim, epoch=self.epoch)
 
-        self.vizdoom = VizDoom(cfg)
         self.preprocessing()
 
     def preprocessing(self):
         if cfg.package_data or not Path('./data.pkl').is_file():
+            vizdoom = VizDoom(cfg)
             memory = []
             for episode in trange(cfg.gather_epochs):
-                self.vizdoom.new_episode()
-                frame = self.vizdoom.get_preprocessed_state()
-                frames = []
-                # Init stack of n frames
-                for i in range(cfg.num_frames):
-                    frames.append(frame)
+                vizdoom.new_episode()
+                s0 = vizdoom.get_preprocessed_state()
 
-                while not self.vizdoom.is_episode_finished():
-                    #s0 = tf.concat(frames, axis=-1)
-                    s0 = frames[-1]
+                while not vizdoom.is_episode_finished():
                     action = random.choice(cfg.actions)
-                    self.vizdoom.make_action(action)
+                    vizdoom.make_action(action)
 
-                    # Update frames with latest image
-                    frames.pop(0)
-                    frames.append(self.vizdoom.get_preprocessed_state())
-
+                    s1 = vizdoom.get_preprocessed_state()
                     action = np.reshape(action, [1, 1, len(cfg.actions)]).astype(np.float32)
-                    #s1 = tf.concat(frames, axis=-1)
-                    s1 = frames[-1]
 
                     memory.append([s0, action, s1])
+                    s0 = s1
 
             with open('data.pkl', 'wb') as f:
                 pickle.dump(memory, f)
@@ -67,12 +57,8 @@ class Simulator(object):
         with open(cfg.data_dir, 'rb') as f:
             s0, action, s1 = zip(*pickle.load(f))
 
-        s0 = np.array(s0)
-        action = np.array(action)
-        s1 = np.array(s1)
-
         self.size = len(s0)
-        self.data = tf.data.Dataset.from_tensor_slices((s0, action, s1))
+        self.data = tf.data.Dataset.from_tensor_slices((np.array(s0), np.array(action), np.array(s1)))
 
     def update(self, s0, action, s1):
         # Normalize
@@ -85,9 +71,10 @@ class Simulator(object):
             # Compare generated transformation matrix with truth
             loss = tf.reduce_mean(self.loss(truth, logits))
 
+        # Log stats, images
         self.writer.log(self.optim, tape, loss)
-        self.writer.log_state(logits, "logits")
-        self.writer.log_state(truth, "truth_logits")
+        self.writer.log_state("logits", logits)
+        self.writer.log_state("truth_logits", truth)
         # Compute/apply gradients
         grads = tape.gradient(loss, self.model.trainable_weights)
         grads_and_vars = zip(grads, self.model.trainable_weights)
@@ -106,7 +93,7 @@ class Simulator(object):
 
     def predict(self, s0, action):
         s0_n = tf.image.per_image_standardization(s0)
-        logits = self.model(s0_n, action[None])
+        logits = self.model(s0_n, action)
         return logits + s0_n
 
 def main():

@@ -38,19 +38,27 @@ class AlphaDoom(object):
 
         self.writer = Writer(cfg)
         # Restore if save exists
-        self.model, self.optim, self.epoch = self.writer.restore(self.model, self.optim, self.epoch)
+        if Path('./alphadoom_saves/best').is_dir():
+            self.model, self.optim, self.epoch = self.writer.restore(self.model, self.optim, self.epoch)
 
     def update(self):
         # Fetch batch of experiences
-        s0, pi, z, s1 = self.replay.fetch()
+        s0, pi, z = self.replay.fetch()
         z = np.array(z).reshape((len(z), 1))
-        pi = np.array(pi)
+        pi = np.array(pi, dtype=np.float32)
         # Construct graph
         with tf.GradientTape() as tape:
             p, v = self.model(s0)
-            loss = tf.reduce_mean(self.loss1(z, v) - self.loss2(tf.pow(pi, cfg.T), p)) # + cfg.c * tf.nn.l2_loss(self.model.weights))
+            loss1 = self.loss1(z, v)
+            loss2 = self.loss2(pi, p)
+            l2_reg =  tf.add_n([tf.nn.l2_loss(v) for v in self.model.weights])
+            loss = loss1 + loss2 + cfg.c * l2_reg
         
+        # Log stats
         self.writer.log(self.optim, tape, loss)
+        self.writer.log_var("MSE", loss1)
+        self.writer.log_var("Cross Entropy", loss2)
+        self.writer.log_var("reg", l2_reg)
         # Compute/apply gradients
         grads = tape.gradient(loss, self.model.weights)
         grads_and_vars = zip(grads, self.model.weights)
@@ -65,26 +73,22 @@ class AlphaDoom(object):
             leaf = self.mcts.search()
             # Simulate leaf's state
             action = np.reshape(leaf.a, [1, 1, len(cfg.actions)]).astype(np.float32)
-            leaf.s = self.autoencoder.predict(leaf.parent.s, action)
+            leaf.s = self.autoencoder.predict(leaf.parent.s[-1][None], action)
             # Get p, the prior probability set of all actions (edges) from current leaf node, and v, the value of current leaf node
-            p, v = self.model(leaf.s)
+            s = tf.concat(leaf.s, axis=-1)
+            p, v = self.model(s)
             # Backprop through MCTS tree
             self.mcts.update(leaf, v, p)
 
     # Returns best action
-    def perform_action(self, s0):
+    def perform_action(self, frames):
         # Shape (H, W, 1) to (1, H, W, 1)
-        self.mcts.root.s = s0[None]
+        self.mcts.root.s = frames
         self.simulate()
-        action, pi = self.mcts.select_action()
+        action = self.mcts.select_action()
         # Take action
         reward = self.vizdoom.make_action(action)
-        # Reward of -1 if bad, +1 if good
-        if reward > 0:
-            reward = 1
-        else:
-            reward = -1
-        return pi, reward
+        return action, reward
     
     def train(self):
         if Path('/replay.pkl').is_file():
@@ -99,17 +103,33 @@ class AlphaDoom(object):
             for i in range(cfg.num_frames):
                 frames.append(frame)
             
+            z = 0
+            memories = []
             while not self.vizdoom.is_episode_finished():
-                s0 = tf.concat(frames, axis=-1)
-                pi, z = self.perform_action(s0)
+                pi, reward = self.perform_action(frames)
+
+                # Check final outcome; +1 to states if positive reward, -1 if negative
+                if reward >= 0:
+                    z = 1
+                    break
+                else:
+                    z = -1
+
+                if self.vizdoom.is_episode_finished == True:
+                    break
 
                 # Update frames with latest image
                 frames.pop(0)
                 frames.append(self.vizdoom.get_preprocessed_state())
 
-                s1 = tf.concat(frames, axis=-1)
-                self.replay.push([s0, pi, z, s1])
-                
+                s0 = tf.concat(frames, axis=-1)
+                memories.append([s0, pi])
+            
+            self.writer.log_var("z", z)
+            # Add memories to experience replay
+            for i in range(len(memories)):
+                memories[i].append(z)
+                self.replay.push(memories[i])
             # Train on experiences from memory
             self.update()
 

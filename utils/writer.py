@@ -29,7 +29,9 @@ class Writer(object):
 
     def restore(self, model, optim, epoch):
         saver = tf.train.Checkpoint(model=model, optim=optim, epoch=epoch, global_step=self.global_step)
-        saver.restore(tf.train.latest_checkpoint(self.save_path))
+        status = saver.restore(tf.train.latest_checkpoint(self.save_path))
+        status.assert_existing_objects_matched()
+        status.assert_consumed()
         return model, optim, epoch
 
     def log(self, optim, tape, loss):
@@ -48,8 +50,13 @@ class Writer(object):
                                 if slotvar is not None:
                                     tf.contrib.summary.histogram(variable.name + '/' + slot, slotvar)
 
-    def log_state(self, state, name):
+    def log_state(self, name, state):
         if self.global_step.numpy() % (self.log_freq * 10) == 0:
             with tf.contrib.summary.always_record_summaries():
                 state = tf.cast(state, tf.float32)
                 tf.contrib.summary.image(name, state, max_images=3)
+    
+    def log_var(self, name, var):
+        if self.global_step.numpy() % self.log_freq == 0:
+            with tf.contrib.summary.always_record_summaries():
+                status = tf.contrib.summary.scalar(name, var)

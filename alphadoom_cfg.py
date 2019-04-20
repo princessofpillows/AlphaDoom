@@ -36,15 +36,11 @@ train_arg.add_argument("--learning_rate", type=float,
                        help="Learning rate (gradient step size)")
 
 train_arg.add_argument("--batch_size", type=int,
-                       default=8,
+                       default=48,
                        help="Positions in queue to be evaluated at a time")
 
-train_arg.add_argument("--mini_batch_size", type=int,
-                       default=2048,
-                       help="States to sample from replay memory")
-
 train_arg.add_argument("--num_sims", type=int,
-                       default=4,
+                       default=8,
                        help="Number of simulations to run before selecting action")
 
 train_arg.add_argument("--epochs", type=int,
@@ -112,11 +108,11 @@ model_arg.add_argument("--optim", type=str,
 model_arg.add_argument("--loss1", type=str,
                        default=tf.losses.mean_squared_error,
                        choices=[tf.losses.huber_loss, tf.losses.mean_squared_error],
-                       help="Chosen loss for z and reward")
+                       help="Chosen loss for z and v")
 
 model_arg.add_argument("--loss2", type=str,
                        default=tf.losses.softmax_cross_entropy,
-                       choices=[tf.losses.softmax_cross_entropy, tf.losses.sigmoid_cross_entropy, tf.losses.sparse_softmax_cross_entropy],
+                       choices=[tf.losses.softmax_cross_entropy, tf.losses.sparse_softmax_cross_entropy],
                        help="Chosen loss for probabilities and mcts edges")
 
 model_arg.add_argument("--resolution",
@@ -129,8 +125,8 @@ model_arg.add_argument("--activ", type=str,
                        help="Activation function to use")
 
 model_arg.add_argument("--init", type=str,
-                       default="random_normal",
-                       choices=["glorot_normal", "glorot_uniform", "random_normal", "random_uniform", "truncated_normal"],
+                       default="glorot_normal",
+                       choices=["glorot_normal", "glorot_uniform", "he_normal", "he_uniform"],
                        help="Initialization function to use")
 
 # Possible actions
@@ -147,7 +143,7 @@ model_arg.add_argument("--skiprate", type=int,
                        help="Number of frames to skip during each action. Current action will be repeated for duration of skip")
 
 model_arg.add_argument("--num_frames", type=int,
-                       default=1,
+                       default=4,
                        help="Number of stacked frames to send to CNN, depicting history")
 
 model_arg.add_argument("--num_channels", type=int,
@@ -165,14 +161,18 @@ train_arg.add_argument("--min_filters",
 
 train_arg.add_argument("--max_filters",
                        default=128,
-                       help="Maximum number of filters in network")   
+                       help="Maximum number of filters in network")
+
+train_arg.add_argument("--num_layers",
+                       default=19,
+                       help="Residual layers in alphadoom network")  
 
 # ----------------------------------------
 # Arguments for memory
 mem_arg = add_argument_group("Memory")
 
 mem_arg.add_argument("--cap", type=int,
-                       default=5000,
+                       default=1000,
                        help="Maximum number of transitions in replay memory")
 
 # ----------------------------------------

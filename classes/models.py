@@ -1,6 +1,6 @@
 import numpy as np
 import tensorflow as tf
-from classes.layers import Residual, Policy, Value
+from classes.layers import Residual, Policy, Value, Residual_Custom
 
 
 class AutoEncoder(tf.keras.Model):
@@ -17,7 +17,7 @@ class AutoEncoder(tf.keras.Model):
         # From shape (nxn) -> (1x1)
         for i in range(num_layers):
             for blk in range(cfg.num_blks):
-                self.encode.add(Residual(cfg, filters))
+                self.encode.add(Residual_Custom(cfg, filters))
             if filters != cfg.max_filters:
                 filters *= 2
             if i < num_layers - 1:
@@ -28,7 +28,7 @@ class AutoEncoder(tf.keras.Model):
         # From shape (1x1) -> (nxn)
         for i in range(num_layers):
             for blk in range(cfg.num_blks):
-                self.decode.add(Residual(cfg, filters))
+                self.decode.add(Residual_Custom(cfg, filters))
             if filters != cfg.min_filters and i > 1:
                 filters //= 2
             if i < num_layers - 1:
@@ -53,11 +53,11 @@ class AlphaGoZero(tf.keras.Model):
 
     def __init__(self, cfg):
         super(AlphaGoZero, self).__init__()
-        self.shape = (19, 19)
         self.block = tf.keras.Sequential()
-        self.block.add(tf.keras.layers.Conv2D(256, 3, 1, activation=cfg.activ, kernel_initializer=cfg.init))
+        self.block.add(tf.keras.layers.Conv2D(256, 3, 1, kernel_initializer=cfg.init))
         self.block.add(tf.keras.layers.BatchNormalization())
-        for blk in range(19):
+        self.block.add(tf.keras.layers.ReLU())
+        for blk in range(cfg.num_layers):
             self.block.add(Residual(cfg, 256))
         self.policy = Policy(cfg)
         self.value = Value(cfg)

@@ -114,12 +114,7 @@ class MCTS(object):
 
         # Update root
         self.root = selection
-        pi = []
-        # Compute visit probs of each child of root
-        for child in self.root.children:
-            pi.append(np.power(child.n, 1 / self.T))
-
-        return selection.a, pi
+        return selection.a
     
     # Game tree visualization
     def visualize(self):
