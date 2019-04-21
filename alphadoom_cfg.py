@@ -44,7 +44,7 @@ train_arg.add_argument("--num_sims", type=int,
                        help="Number of simulations to run before selecting action")
 
 train_arg.add_argument("--epochs", type=int,
-                       default=100,
+                       default=60,
                        help="Number of episodes to train on")
 
 train_arg.add_argument("--momentum", type=float,

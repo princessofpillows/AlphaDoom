@@ -7,6 +7,7 @@ from alphadoom_cfg import get_cfg
 from classes.mcts import MCTS
 from classes.replay import Replay
 from classes.models import AutoEncoder
+from simulator import Simulator
 from utils.vizdoom_api import VizDoom
 from utils.writer import Writer
 
@@ -26,8 +27,10 @@ class AlphaDoom(object):
         self.vizdoom = VizDoom(cfg)
         self.mcts = MCTS(cfg)
         self.replay = Replay(cfg)
-        self.autoencoder = AutoEncoder(cfg)
-        tf.train.Checkpoint(model=self.autoencoder).restore(tf.train.latest_checkpoint('./simulator_saves/best'))
+        self.autoencoder = Simulator()
+        self.autoencoder.train()
+        #self.autoencoder = AutoEncoder()
+        #tf.train.Checkpoint(model=self.autoencoder).restore(tf.train.latest_checkpoint('./simulator_saves/best'))
 
         # Load selected model
         self.model = cfg.model(cfg)

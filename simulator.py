@@ -93,7 +93,7 @@ class Simulator(object):
 
     def predict(self, s0, action):
         s0_n = tf.image.per_image_standardization(s0)
-        logits = self.model(s0_n, action)
+        logits = self.model(s0_n, action[None])
         return logits + s0_n
 
 def main():

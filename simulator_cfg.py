@@ -28,7 +28,7 @@ pre_arg.add_argument("--vizdoom_dir", type=str,
                        help="Location of vizdoom engine")
 
 pre_arg.add_argument("--package_data", type=bool,
-                       default=False,
+                       default=True,
                        help="Whether or not to gather and save new frames")
 
 pre_arg.add_argument("--gather_epochs", type=int,
@@ -121,10 +121,6 @@ model_arg.add_argument("--actions", type=int,
 model_arg.add_argument("--skiprate", type=int,
                        default=5,
                        help="Number of frames to skip during each action. Current action will be repeated for duration of skip")
-
-model_arg.add_argument("--num_frames", type=int,
-                       default=4,
-                       help="Number of stacked frames to send to CNN, depicting motion")
 
 model_arg.add_argument("--num_channels", type=int,
                        default=1,
