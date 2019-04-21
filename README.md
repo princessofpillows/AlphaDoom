@@ -5,6 +5,8 @@ This repository holds the final project deliverable for CSC 490, directed studie
 
 This implementation is in the 1991 3D game Doom, rather than in Go, and uses a custom next state predictor to simulate states.
 
+The paper is in the repository and called "AlphaDoom_Paper.pdf".
+
 ## Get Started
 
 The following information is needed in order to get this project running on your system.

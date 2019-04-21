@@ -24,7 +24,6 @@ class AlphaDoom(object):
     def __init__(self):
         super(AlphaDoom, self).__init__()
 
-        self.vizdoom = VizDoom(cfg)
         self.mcts = MCTS(cfg)
         self.replay = Replay(cfg)
         self.autoencoder = Simulator()
@@ -43,6 +42,8 @@ class AlphaDoom(object):
         # Restore if save exists
         if Path('./alphadoom_saves/best').is_dir():
             self.model, self.optim, self.epoch = self.writer.restore(self.model, self.optim, self.epoch)
+        
+        self.vizdoom = VizDoom(cfg)
 
     def update(self):
         # Fetch batch of experiences
